@@ -7,10 +7,10 @@ using MelonLoader;
 using UnityEngine;
 using UnityEngine.Video;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.1", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.2", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
+[assembly: AssemblyVersion("1.1.2.0")]
+[assembly: AssemblyFileVersion("1.1.2.0")]
 
 namespace ClipLinkMedia;
 
@@ -187,7 +187,7 @@ public sealed class Core : MelonMod
             startInfo.ArgumentList.Add("-f");
             startInfo.ArgumentList.Add("b[ext=mp4]/b");
             startInfo.ArgumentList.Add("--print-to-file");
-            startInfo.ArgumentList.Add("after_move:filepath");
+            startInfo.ArgumentList.Add("after_move:%(filepath)s");
             startInfo.ArgumentList.Add(resultFile);
             startInfo.ArgumentList.Add("-o");
             startInfo.ArgumentList.Add(Path.Combine(_cacheDirectory, "%(title).100s [%(id)s].%(ext)s"));
