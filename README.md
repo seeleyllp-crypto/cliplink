@@ -39,3 +39,9 @@ python -m venv .venv
 ```
 
 Place a current `yt-dlp.exe` beside the generated `ClipLink.exe` before distributing the folder.
+
+## BONELAB mod
+
+The `bonelab-mod` folder contains the source and Thunderstore metadata for ClipLink Media v1.1.1. It is a Windows PC MelonLoader mod that downloads a copied YouTube URL and plays the resulting local MP4 through the mod.io Media Players content pack.
+
+The ready-to-import package is published with the GitHub v1.1.1 release. In Thunderstore Mod Manager, select BONELAB, open **Settings**, and choose **Import local mod** to install the ZIP into a profile.
