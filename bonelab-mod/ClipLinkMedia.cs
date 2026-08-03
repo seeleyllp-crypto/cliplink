@@ -8,10 +8,10 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.Video;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.4", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.5", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("1.1.4.0")]
-[assembly: AssemblyFileVersion("1.1.4.0")]
+[assembly: AssemblyVersion("1.1.5.0")]
+[assembly: AssemblyFileVersion("1.1.5.0")]
 
 namespace ClipLinkMedia;
 
@@ -244,7 +244,7 @@ public sealed class Core : MelonMod
             startInfo.ArgumentList.Add("after_move:%(filepath)s");
             startInfo.ArgumentList.Add(resultFile);
             startInfo.ArgumentList.Add("-o");
-            startInfo.ArgumentList.Add(Path.Combine(_cacheDirectory, "%(title).100s [%(id)s].%(ext)s"));
+            startInfo.ArgumentList.Add(Path.Combine(_cacheDirectory, "%(id)s.%(ext)s"));
             startInfo.ArgumentList.Add(youtubeUrl);
 
             using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("yt-dlp did not start.");
@@ -317,7 +317,7 @@ public sealed class Core : MelonMod
 
     private static string ChooseCacheDirectory()
     {
-        string preferred = Path.Combine(_dataDirectory, "Cache");
+        string preferred = Path.Combine(Path.GetTempPath(), "ClipLinkMediaCache");
         try
         {
             string root = Path.GetPathRoot(preferred) ?? string.Empty;
