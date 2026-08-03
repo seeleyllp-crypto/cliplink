@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.1.0
+
+- Added persistent Best, 720p, 480p, and 360p MP4 quality choices.
+- Added recent YouTube searches that can be run again with one selection.
+- Added recently selected videos that can be copied again across game launches.
+- Added one-click public-link and local-download retries for the last video.
+- Added clipboard URL inspection, open-copied-video, copy-downloads-path, and last-source controls.
+- Added persistent usage statistics and a detailed copyable setup report.
+- Preserved the complete v3.0 workflow and installed-client-only Fusion OWNER label.
+
 ## 3.0.0
 
 - Expanded ClipLink Media into an all-in-one BoneMenu hub.

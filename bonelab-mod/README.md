@@ -1,6 +1,6 @@
 # ClipLink Media for BONELAB
 
-ClipLink Media v3.0.0 is an all-in-one Windows PC BONELAB MelonLoader mod. From BoneMenu, it can search YouTube without a login, copy a selected video link, download a permitted video, create a temporary direct MP4 URL for Media Player, save an MP4 locally, remember recent links, and notify you when each job finishes.
+ClipLink Media v3.1.0 is an all-in-one Windows PC BONELAB MelonLoader mod. From BoneMenu, it can search YouTube without a login, copy a selected video link, download a permitted video, create a temporary direct MP4 URL for Media Player, save an MP4 locally, remember searches/videos/links, repeat jobs, collect usage statistics, and notify you when each job finishes.
 
 ## All-in-one controls
 
@@ -11,7 +11,11 @@ ClipLink Media v3.0.0 is an all-in-one Windows PC BONELAB MelonLoader mod. From 
 - **Recent public URLs** saves up to eight unexpired results with their expiry times. Select one to copy it again.
 - **Copy last public URL** and **Open last public URL** reuse the newest result.
 - **Cancel current job** stops the active yt-dlp download or Litterbox upload.
+- **MP4 quality** saves a Best, 720p, 480p, or 360p choice for future jobs.
+- **Recent searches** reruns saved YouTube searches, and **Recently selected videos** copies earlier selections again.
+- **Repeat last video** recreates a public URL or local download without searching again.
 - **Setup and folders** checks yt-dlp/Fusion, opens the ClipLink and downloads folders, opens YouTube, and opens the official yt-dlp download.
+- Clipboard tools inspect or open the copied URL, and statistics/setup-report controls help diagnose a problem.
 - Progress, success, cancellation, and failure notifications appear in game.
 
 ## Use with Media Player
@@ -20,7 +24,7 @@ ClipLink Media v3.0.0 is an all-in-one Windows PC BONELAB MelonLoader mod. From 
 2. Select **Search**, type a search, press Enter, and choose **Search YouTube**.
 3. Select a video title. Its YouTube link is copied automatically.
 4. Return to the main ClipLink page and turn on **I own / have permission**.
-5. Optionally choose **Public-link expiry** and select 1, 12, 24, or 72 hours.
+5. Optionally choose **MP4 quality** and **Public-link expiry**.
 6. Choose **Make public MP4 URL**.
 7. Wait for the completion notification. The direct MP4 URL is now in the Windows clipboard.
 8. Paste that URL into the mod.io Media Player, including while using Fusion.
@@ -37,7 +41,7 @@ The OWNER label is cosmetic only. It does not grant server ownership, host contr
 
 ## Install yt-dlp from GitHub
 
-The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v3.0.0 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v3.0.0/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
+The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v3.1.0 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v3.1.0/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
 
 In BoneMenu, choose **Setup and folders**, then **Open ClipLink folder**. Move the downloaded `yt-dlp.exe` into that folder. The full path normally ends in `UserData/ClipLinkMedia/yt-dlp.exe`. **Get yt-dlp from GitHub** opens the official download directly, and **Check setup** confirms when it is found.
 

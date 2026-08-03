@@ -13,10 +13,10 @@ using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "3.0.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "3.1.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("3.0.0.0")]
-[assembly: AssemblyFileVersion("3.0.0.0")]
+[assembly: AssemblyVersion("3.1.0.0")]
+[assembly: AssemblyFileVersion("3.1.0.0")]
 
 namespace ClipLinkMedia;
 
@@ -28,6 +28,8 @@ public sealed class Core : MelonMod
     private const string LitterboxUploadUrl = "https://litterbox.catbox.moe/resources/internals/api.php";
     private const string DefaultLitterboxRetention = "72h";
     private const int MaximumHistoryEntries = 8;
+    private const int MaximumRecentVideos = 12;
+    private const int MaximumRecentSearches = 8;
     private const long MaxUploadBytes = 1_000_000_000L;
     private const long MinimumTemporarySpace = 1200L * 1024 * 1024;
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
@@ -45,6 +47,8 @@ public sealed class Core : MelonMod
     private static string _searchQuery = "bonelab";
     private static Page? _searchResultsPage;
     private static Page? _historyPage;
+    private static Page? _recentVideosPage;
+    private static Page? _searchHistoryPage;
     private static ClipLinkSettings _settings = new();
     private static CancellationTokenSource? _jobCancellation;
     private static bool _rightsConfirmed;
@@ -64,7 +68,7 @@ public sealed class Core : MelonMod
 
         BuildBoneMenu();
         InitializeFusionOwnerTag();
-        MelonLogger.Msg($"All-in-one v3 ready. Public-link expiry is {_settings.LitterboxRetention}; {LinkHistory.Count} saved link(s) loaded.");
+        MelonLogger.Msg($"All-in-one v3.1 ready. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s) loaded.");
         MelonLogger.Msg("Fusion OWNER tag enabled. Players with ClipLink Media installed will see OWNER above the creator's head.");
         MelonLogger.Warning("Litterbox uploads are public and temporary. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
@@ -129,11 +133,28 @@ public sealed class Core : MelonMod
         browserPage.CreateFunction("Search YouTube", Color.red, SearchYouTube);
         _searchResultsPage = browserPage.CreatePage("Video results", Color.cyan);
         _searchResultsPage.CreateFunction("Search first", Color.gray, SearchYouTube);
+        _recentVideosPage = browserPage.CreatePage("Recently selected videos", Color.cyan);
+        RefreshRecentVideosPage();
+        _searchHistoryPage = browserPage.CreatePage("Recent searches", Color.yellow);
+        RefreshSearchHistoryPage();
 
         page.CreateBool("I own / have permission", Color.yellow, false, value => _rightsConfirmed = value);
         page.CreateFunction("Make public MP4 URL", Color.green, StartClipboardJob);
         page.CreateFunction("Download MP4 only", Color.green, StartLocalDownloadJob);
         page.CreateFunction("Cancel current job", Color.red, CancelCurrentJob);
+
+        Page repeatPage = page.CreatePage("Repeat last video", Color.green);
+        repeatPage.CreateFunction("Make public URL again", Color.green, StartLastPublicJob);
+        repeatPage.CreateFunction("Download MP4 again", Color.cyan, StartLastLocalJob);
+        repeatPage.CreateFunction("Copy last YouTube link", Color.white, CopyLastSourceUrl);
+        repeatPage.CreateFunction("Open last YouTube video", Color.red, OpenLastSourceUrl);
+
+        Page qualityPage = page.CreatePage("MP4 quality", Color.magenta);
+        qualityPage.CreateFunction("Show current quality", Color.white, ShowCurrentQuality);
+        qualityPage.CreateFunction("Use best MP4", Color.cyan, () => SetVideoQuality("Best"));
+        qualityPage.CreateFunction("Use 720p", Color.cyan, () => SetVideoQuality("720p"));
+        qualityPage.CreateFunction("Use 480p", Color.cyan, () => SetVideoQuality("480p"));
+        qualityPage.CreateFunction("Use 360p", Color.cyan, () => SetVideoQuality("360p"));
 
         Page expiryPage = page.CreatePage("Public-link expiry", Color.yellow);
         expiryPage.CreateFunction("Show current expiry", Color.white, ShowCurrentRetention);
@@ -153,6 +174,11 @@ public sealed class Core : MelonMod
         toolsPage.CreateFunction("Get yt-dlp from GitHub", Color.yellow, OpenYtDlpDownload);
         toolsPage.CreateFunction("Open ClipLink folder", Color.yellow, OpenYtDlpFolder);
         toolsPage.CreateFunction("Open downloads folder", Color.cyan, OpenDownloadsFolder);
+        toolsPage.CreateFunction("Copy downloads path", Color.white, CopyDownloadsPath);
+        toolsPage.CreateFunction("Inspect copied URL", Color.white, InspectCopiedUrl);
+        toolsPage.CreateFunction("Open copied YouTube URL", Color.red, OpenCopiedYouTubeUrl);
+        toolsPage.CreateFunction("Show usage statistics", Color.magenta, ShowStatistics);
+        toolsPage.CreateFunction("Copy setup report", Color.green, CopySetupReport);
     }
 
     private static void LoadPersistentState()
@@ -170,6 +196,21 @@ public sealed class Core : MelonMod
 
         if (!IsSupportedRetention(_settings.LitterboxRetention))
             _settings.LitterboxRetention = DefaultLitterboxRetention;
+        if (!IsSupportedVideoQuality(_settings.VideoQuality))
+            _settings.VideoQuality = "Best";
+        _settings.LastSourceUrl ??= string.Empty;
+        _settings.RecentSearches ??= new List<string>();
+        _settings.RecentVideos ??= new List<RecentVideoEntry>();
+        _settings.RecentSearches = _settings.RecentSearches
+            .Where(query => !string.IsNullOrWhiteSpace(query))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaximumRecentSearches)
+            .ToList();
+        _settings.RecentVideos = _settings.RecentVideos
+            .Where(entry => IsYouTubeUrl(entry.Url))
+            .OrderByDescending(entry => entry.SelectedUtc)
+            .Take(MaximumRecentVideos)
+            .ToList();
 
         try
         {
@@ -236,6 +277,120 @@ public sealed class Core : MelonMod
         Notify("Public-link expiry", $"Current setting: {RetentionDisplay(_settings.LitterboxRetention)}.", NotificationType.Information, 4f);
     }
 
+    private static void SetVideoQuality(string quality)
+    {
+        if (!IsSupportedVideoQuality(quality)) return;
+        _settings.VideoQuality = quality;
+        SaveSettings();
+        MelonLogger.Msg($"MP4 quality set to {quality}.");
+        Notify("MP4 quality", $"New jobs will use {quality} quality.", NotificationType.Success, 4f);
+    }
+
+    private static void ShowCurrentQuality()
+    {
+        Notify("MP4 quality", $"Current setting: {_settings.VideoQuality}.", NotificationType.Information, 4f);
+    }
+
+    private static void AddRecentSearch(string query)
+    {
+        _settings.RecentSearches.RemoveAll(saved => string.Equals(saved, query, StringComparison.OrdinalIgnoreCase));
+        _settings.RecentSearches.Insert(0, query);
+        while (_settings.RecentSearches.Count > MaximumRecentSearches)
+            _settings.RecentSearches.RemoveAt(_settings.RecentSearches.Count - 1);
+        SaveSettings();
+        RefreshSearchHistoryPage();
+    }
+
+    private static void RefreshSearchHistoryPage()
+    {
+        if (_searchHistoryPage == null) return;
+
+        _searchHistoryPage.RemoveAll();
+        if (_settings.RecentSearches.Count == 0)
+        {
+            _searchHistoryPage.CreateFunction("No recent searches", Color.gray, () => Warn("Run a YouTube search first."));
+        }
+        else
+        {
+            foreach (string query in _settings.RecentSearches.ToArray())
+            {
+                string savedQuery = query;
+                _searchHistoryPage.CreateFunction(ShortMenuText(query, 64), Color.white, () => RunSavedSearch(savedQuery));
+            }
+        }
+
+        _searchHistoryPage.CreateFunction("Clear search history", Color.red, ClearSearchHistory);
+    }
+
+    private static void RunSavedSearch(string query)
+    {
+        _searchQuery = query;
+        SearchYouTube();
+    }
+
+    private static void ClearSearchHistory()
+    {
+        _settings.RecentSearches.Clear();
+        SaveSettings();
+        RefreshSearchHistoryPage();
+        Notify("YouTube browser", "Search history cleared.", NotificationType.Success, 3f);
+    }
+
+    private static void AddRecentVideo(string title, string url)
+    {
+        _settings.RecentVideos.RemoveAll(entry => string.Equals(entry.Url, url, StringComparison.OrdinalIgnoreCase));
+        _settings.RecentVideos.Insert(0, new RecentVideoEntry
+        {
+            Title = title,
+            Url = url,
+            SelectedUtc = DateTimeOffset.UtcNow,
+        });
+        while (_settings.RecentVideos.Count > MaximumRecentVideos)
+            _settings.RecentVideos.RemoveAt(_settings.RecentVideos.Count - 1);
+        _settings.LastSourceUrl = url;
+        SaveSettings();
+        RefreshRecentVideosPage();
+    }
+
+    private static void RefreshRecentVideosPage()
+    {
+        if (_recentVideosPage == null) return;
+
+        _recentVideosPage.RemoveAll();
+        if (_settings.RecentVideos.Count == 0)
+        {
+            _recentVideosPage.CreateFunction("No selected videos", Color.gray, () => Warn("Select a YouTube search result first."));
+        }
+        else
+        {
+            foreach (RecentVideoEntry entry in _settings.RecentVideos.ToArray())
+            {
+                RecentVideoEntry selectedEntry = entry;
+                FunctionElement button = _recentVideosPage.CreateFunction(ShortMenuText(entry.Title, 64), Color.white, () => CopyRecentVideo(selectedEntry));
+                button.SetTooltip($"Selected: {entry.SelectedUtc.LocalDateTime:g}\n{entry.Url}");
+            }
+        }
+
+        _recentVideosPage.CreateFunction("Clear selected videos", Color.red, ClearRecentVideos);
+    }
+
+    private static void CopyRecentVideo(RecentVideoEntry entry)
+    {
+        GUIUtility.systemCopyBuffer = entry.Url;
+        _settings.LastSourceUrl = entry.Url;
+        SaveSettings();
+        Notify("YouTube link copied", ShortMenuText(entry.Title, 100), NotificationType.Success, 4f);
+    }
+
+    private static void ClearRecentVideos()
+    {
+        _settings.RecentVideos.Clear();
+        _settings.LastSourceUrl = string.Empty;
+        SaveSettings();
+        RefreshRecentVideosPage();
+        Notify("YouTube browser", "Selected-video history cleared.", NotificationType.Success, 3f);
+    }
+
     private static void RefreshHistoryPage()
     {
         if (_historyPage == null) return;
@@ -300,6 +455,7 @@ public sealed class Core : MelonMod
             return;
         }
 
+        AddRecentSearch(query);
         MelonLogger.Msg($"Searching signed-out YouTube results for: {query}");
         Notify("YouTube browser", $"Searching for {ShortMenuText(query, 60)}...", NotificationType.Information, 3f);
         _ = Task.Run(() => LoadYouTubeResults(query));
@@ -351,6 +507,7 @@ public sealed class Core : MelonMod
     private static void CopyYouTubeChoice(YouTubeSearchResult choice)
     {
         GUIUtility.systemCopyBuffer = choice.Url;
+        AddRecentVideo(choice.Title, choice.Url);
         MelonLogger.Msg($"YouTube link copied: {choice.Url} ({choice.Title})");
         Notify("YouTube link copied", ShortMenuText(choice.Title, 100), NotificationType.Success, 5f);
     }
@@ -406,6 +563,50 @@ public sealed class Core : MelonMod
         }
     }
 
+    private static void CopyDownloadsPath()
+    {
+        Directory.CreateDirectory(_downloadsDirectory);
+        GUIUtility.systemCopyBuffer = _downloadsDirectory;
+        Notify("ClipLink Media", "Downloads folder path copied.", NotificationType.Success, 3f);
+    }
+
+    private static void InspectCopiedUrl()
+    {
+        string copied = GUIUtility.systemCopyBuffer?.Trim() ?? string.Empty;
+        if (IsYouTubeUrl(copied))
+        {
+            Notify("Copied YouTube URL", $"Video ID: {GetYouTubeVideoId(copied)}", NotificationType.Success, 5f);
+            return;
+        }
+        if (IsHttpsUrl(copied))
+        {
+            Uri uri = new(copied);
+            Notify("Copied HTTPS URL", $"Host: {uri.Host}", NotificationType.Information, 5f);
+            return;
+        }
+        Warn("The clipboard does not contain a supported web URL.");
+    }
+
+    private static void OpenCopiedYouTubeUrl()
+    {
+        string copied = GUIUtility.systemCopyBuffer?.Trim() ?? string.Empty;
+        if (!IsYouTubeUrl(copied))
+        {
+            Warn("Copy a youtube.com or youtu.be video URL first.");
+            return;
+        }
+
+        try
+        {
+            Application.OpenURL(copied);
+            Notify("ClipLink Media", "Opened the copied YouTube video.", NotificationType.Information, 3f);
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Could not open the copied video: {ex.Message}");
+        }
+    }
+
     private static void StartClipboardJob()
     {
         TryStartClipboardJob(uploadPublicly: true);
@@ -418,16 +619,31 @@ public sealed class Core : MelonMod
 
     private static void TryStartClipboardJob(bool uploadPublicly)
     {
+        string url = GUIUtility.systemCopyBuffer?.Trim() ?? string.Empty;
+        TryStartJob(url, uploadPublicly);
+    }
+
+    private static void StartLastPublicJob()
+    {
+        TryStartJob(_settings.LastSourceUrl, uploadPublicly: true);
+    }
+
+    private static void StartLastLocalJob()
+    {
+        TryStartJob(_settings.LastSourceUrl, uploadPublicly: false);
+    }
+
+    private static void TryStartJob(string url, bool uploadPublicly)
+    {
         if (!_rightsConfirmed)
         {
             Warn("Turn on 'I own / have permission' before downloading or uploading.");
             return;
         }
 
-        string url = GUIUtility.systemCopyBuffer?.Trim() ?? string.Empty;
         if (!IsYouTubeUrl(url))
         {
-            Warn("Copy a youtube.com or youtu.be video URL first.");
+            Warn("No saved YouTube video is ready. Copy or select one first.");
             return;
         }
 
@@ -442,10 +658,44 @@ public sealed class Core : MelonMod
         lock (JobGate) _jobCancellation = cancellation;
 
         string retention = _settings.LitterboxRetention;
+        string quality = _settings.VideoQuality;
+        _settings.LastSourceUrl = url;
+        SaveSettings();
         string mode = uploadPublicly ? $"public {RetentionDisplay(retention)} link" : "local MP4";
-        MelonLogger.Msg($"Starting {mode} job: {url}");
-        Notify("ClipLink Media", $"Downloading video for a {mode}...", NotificationType.Information, 4f);
-        _ = Task.Run(() => ProcessVideoJob(url, uploadPublicly, retention, cancellation));
+        MelonLogger.Msg($"Starting {quality} {mode} job: {url}");
+        Notify("ClipLink Media", $"Downloading {quality} video for a {mode}...", NotificationType.Information, 4f);
+        _ = Task.Run(() => ProcessVideoJob(url, uploadPublicly, retention, quality, cancellation));
+    }
+
+    private static void CopyLastSourceUrl()
+    {
+        if (!IsYouTubeUrl(_settings.LastSourceUrl))
+        {
+            Warn("No saved YouTube video is ready yet.");
+            return;
+        }
+
+        GUIUtility.systemCopyBuffer = _settings.LastSourceUrl;
+        Notify("ClipLink Media", "Last YouTube link copied.", NotificationType.Success, 3f);
+    }
+
+    private static void OpenLastSourceUrl()
+    {
+        if (!IsYouTubeUrl(_settings.LastSourceUrl))
+        {
+            Warn("No saved YouTube video is ready yet.");
+            return;
+        }
+
+        try
+        {
+            Application.OpenURL(_settings.LastSourceUrl);
+            Notify("ClipLink Media", "Opened the last YouTube video.", NotificationType.Information, 3f);
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Could not open the last YouTube video: {ex.Message}");
+        }
     }
 
     private static void CancelCurrentJob()
@@ -505,21 +755,88 @@ public sealed class Core : MelonMod
 
         bool ytDlpReady = File.Exists(_ytDlpPath);
         bool fusionReady = typeof(NetworkPlayer).Assembly != null;
-        string status = $"yt-dlp: {(ytDlpReady ? "ready" : "missing")}; Fusion: {(fusionReady ? "ready" : "missing")}; expiry: {RetentionDisplay(_settings.LitterboxRetention)}.";
+        string status = $"yt-dlp: {(ytDlpReady ? "ready" : "missing")}; Fusion: {(fusionReady ? "ready" : "missing")}; quality: {_settings.VideoQuality}; expiry: {RetentionDisplay(_settings.LitterboxRetention)}.";
         MelonLogger.Msg($"Setup check - {status} Data: {_dataDirectory}");
         Notify("ClipLink setup check", status, ytDlpReady && fusionReady ? NotificationType.Success : NotificationType.Warning, 7f);
     }
 
-    private static void ProcessVideoJob(string youtubeUrl, bool uploadPublicly, string retention, CancellationTokenSource cancellation)
+    private static void ShowStatistics()
+    {
+        string completed = _settings.LastJobCompletedUtc.HasValue
+            ? _settings.LastJobCompletedUtc.Value.LocalDateTime.ToString("g")
+            : "never";
+        string message = $"Public links: {_settings.TotalPublicLinks}; local downloads: {_settings.TotalLocalDownloads}; processed: {FormatBytes(_settings.TotalBytesProcessed)}; last: {completed}.";
+        MelonLogger.Msg($"Usage statistics - {message}");
+        Notify("ClipLink statistics", message, NotificationType.Information, 8f);
+    }
+
+    private static void CopySetupReport()
+    {
+        _ytDlpPath = ResolveYtDlpPath();
+        string ytDlpVersion = GetYtDlpVersion();
+        string report = string.Join(Environment.NewLine, new[]
+        {
+            "ClipLink Media setup report",
+            "Version: 3.1.0",
+            $"yt-dlp: {ytDlpVersion}",
+            $"yt-dlp path: {_ytDlpPath}",
+            $"Fusion assembly: {typeof(NetworkPlayer).Assembly.GetName().Version}",
+            $"MP4 quality: {_settings.VideoQuality}",
+            $"Public-link expiry: {RetentionDisplay(_settings.LitterboxRetention)}",
+            $"Recent videos: {_settings.RecentVideos.Count}",
+            $"Recent searches: {_settings.RecentSearches.Count}",
+            $"Saved public URLs: {LinkHistory.Count}",
+            $"Local downloads completed: {_settings.TotalLocalDownloads}",
+            $"Public links completed: {_settings.TotalPublicLinks}",
+            $"Total data processed: {FormatBytes(_settings.TotalBytesProcessed)}",
+            $"Data folder: {_dataDirectory}",
+            $"Downloads folder: {_downloadsDirectory}",
+        });
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("ClipLink setup report", "Detailed setup report copied to the clipboard.", NotificationType.Success, 5f);
+    }
+
+    private static string GetYtDlpVersion()
+    {
+        if (!File.Exists(_ytDlpPath)) return "missing";
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = _ytDlpPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            startInfo.ArgumentList.Add("--version");
+            using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("yt-dlp did not start.");
+            if (!process.WaitForExit(3000))
+            {
+                process.Kill(entireProcessTree: true);
+                return "timeout";
+            }
+            string version = process.StandardOutput.ReadToEnd().Trim();
+            return string.IsNullOrWhiteSpace(version) ? "unknown" : version;
+        }
+        catch (Exception ex)
+        {
+            return $"error ({ex.Message})";
+        }
+    }
+
+    private static void ProcessVideoJob(string youtubeUrl, bool uploadPublicly, string retention, string quality, CancellationTokenSource cancellation)
     {
         string? jobDirectory = null;
         CancellationToken token = cancellation.Token;
         try
         {
             jobDirectory = CreateJobDirectory();
-            string mp4Path = DownloadVideo(youtubeUrl, jobDirectory, token);
+            string mp4Path = DownloadVideo(youtubeUrl, jobDirectory, quality, token);
             token.ThrowIfCancellationRequested();
-            string fileSize = FormatBytes(new FileInfo(mp4Path).Length);
+            long fileBytes = new FileInfo(mp4Path).Length;
+            string fileSize = FormatBytes(fileBytes);
 
             if (!uploadPublicly)
             {
@@ -527,8 +844,12 @@ public sealed class Core : MelonMod
                 token.ThrowIfCancellationRequested();
                 MainThreadActions.Enqueue(() =>
                 {
+                    _settings.TotalLocalDownloads++;
+                    _settings.TotalBytesProcessed += fileBytes;
+                    _settings.LastJobCompletedUtc = DateTimeOffset.UtcNow;
+                    SaveSettings();
                     MelonLogger.Msg($"Local MP4 saved: {savedPath}");
-                    Notify("Download complete", $"Saved {Path.GetFileName(savedPath)} ({fileSize}) in ClipLink Downloads.", NotificationType.Success, 7f);
+                    Notify("Download complete", $"Saved {quality} {Path.GetFileName(savedPath)} ({fileSize}) in ClipLink Downloads.", NotificationType.Success, 7f);
                 });
                 return;
             }
@@ -557,6 +878,10 @@ public sealed class Core : MelonMod
                 });
                 while (LinkHistory.Count > MaximumHistoryEntries)
                     LinkHistory.RemoveAt(LinkHistory.Count - 1);
+                _settings.TotalPublicLinks++;
+                _settings.TotalBytesProcessed += fileBytes;
+                _settings.LastJobCompletedUtc = createdUtc;
+                SaveSettings();
                 RefreshHistoryPage();
                 MelonLogger.Msg($"Public MP4 URL copied: {publicUrl}");
                 Notify("ClipLink Media finished", $"{RetentionDisplay(retention)} MP4 URL copied. Expires {expiresUtc.LocalDateTime:g}.", NotificationType.Success, 7f);
@@ -590,7 +915,7 @@ public sealed class Core : MelonMod
         }
     }
 
-    private static string DownloadVideo(string youtubeUrl, string jobDirectory, CancellationToken token)
+    private static string DownloadVideo(string youtubeUrl, string jobDirectory, string quality, CancellationToken token)
     {
         if (!File.Exists(_ytDlpPath))
             throw new FileNotFoundException("yt-dlp.exe is missing. Download it from the official GitHub link in BoneMenu and put it in the ClipLinkMedia folder.", _ytDlpPath);
@@ -611,7 +936,7 @@ public sealed class Core : MelonMod
         startInfo.ArgumentList.Add("--extractor-args");
         startInfo.ArgumentList.Add("youtube:player_client=android_vr,android,ios");
         startInfo.ArgumentList.Add("-f");
-        startInfo.ArgumentList.Add("b[ext=mp4]/b");
+        startInfo.ArgumentList.Add(VideoFormatSelector(quality));
         startInfo.ArgumentList.Add("--max-filesize");
         startInfo.ArgumentList.Add("1000M");
         startInfo.ArgumentList.Add("--print-to-file");
@@ -751,6 +1076,22 @@ public sealed class Core : MelonMod
         return value is "1h" or "12h" or "24h" or "72h";
     }
 
+    private static bool IsSupportedVideoQuality(string? value)
+    {
+        return value is "Best" or "720p" or "480p" or "360p";
+    }
+
+    private static string VideoFormatSelector(string quality)
+    {
+        return quality switch
+        {
+            "720p" => "b[ext=mp4][height<=720]",
+            "480p" => "b[ext=mp4][height<=480]",
+            "360p" => "b[ext=mp4][height<=360]",
+            _ => "b[ext=mp4]",
+        };
+    }
+
     private static string RetentionDisplay(string retention)
     {
         return retention switch
@@ -846,7 +1187,7 @@ public sealed class Core : MelonMod
     private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/3.0.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/3.1.0");
         return client;
     }
 
@@ -881,6 +1222,21 @@ public sealed class Core : MelonMod
 public sealed class ClipLinkSettings
 {
     public string LitterboxRetention { get; set; } = "72h";
+    public string VideoQuality { get; set; } = "Best";
+    public string LastSourceUrl { get; set; } = string.Empty;
+    public List<string> RecentSearches { get; set; } = new();
+    public List<RecentVideoEntry> RecentVideos { get; set; } = new();
+    public int TotalPublicLinks { get; set; }
+    public int TotalLocalDownloads { get; set; }
+    public long TotalBytesProcessed { get; set; }
+    public DateTimeOffset? LastJobCompletedUtc { get; set; }
+}
+
+public sealed class RecentVideoEntry
+{
+    public string Title { get; set; } = string.Empty;
+    public string Url { get; set; } = string.Empty;
+    public DateTimeOffset SelectedUtc { get; set; }
 }
 
 public sealed class LinkHistoryEntry
