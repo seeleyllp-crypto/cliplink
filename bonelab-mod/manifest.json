@@ -1,8 +1,8 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "2.1.2",
+  "version_number": "2.1.3",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
-  "description": "Browse signed-out YouTube videos in BoneMenu, copy a link, and turn it into a public MP4 URL.",
+  "description": "Browse signed-out YouTube videos in BoneMenu and create a temporary 72-hour Litterbox MP4 URL.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
     "bonelib-BoneLib-3.2.1"

@@ -11,10 +11,10 @@ using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.1.2", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.1.3", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("2.1.2.0")]
-[assembly: AssemblyFileVersion("2.1.2.0")]
+[assembly: AssemblyVersion("2.1.3.0")]
+[assembly: AssemblyFileVersion("2.1.3.0")]
 
 namespace ClipLinkMedia;
 
@@ -22,9 +22,10 @@ public sealed class Core : MelonMod
 {
     private const string YouTubeHome = "https://www.youtube.com/";
     private const string YtDlpDownloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
-    private const string CatboxUploadUrl = "https://catbox.moe/user/api.php";
-    private const long MaxUploadBytes = 200L * 1024 * 1024;
-    private const long MinimumTemporarySpace = 500L * 1024 * 1024;
+    private const string LitterboxUploadUrl = "https://litterbox.catbox.moe/resources/internals/api.php";
+    private const string LitterboxRetention = "72h";
+    private const long MaxUploadBytes = 1_000_000_000L;
+    private const long MinimumTemporarySpace = 1200L * 1024 * 1024;
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
     private static readonly HttpClient UploadHttpClient = CreateUploadHttpClient();
     private static readonly HttpClient YouTubeHttpClient = CreateYouTubeHttpClient();
@@ -45,7 +46,7 @@ public sealed class Core : MelonMod
 
         BuildBoneMenu();
         MelonLogger.Msg("Ready. Browse YouTube without login in BoneMenu, select a video to copy its link, then choose Make public MP4 URL.");
-        MelonLogger.Warning("Catbox uploads are public. Upload only videos you own or have permission to share.");
+        MelonLogger.Warning("Litterbox uploads are public and expire after 72 hours. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
             MelonLogger.Error("yt-dlp.exe is not installed. Use the BoneMenu GitHub download and folder buttons.");
     }
@@ -241,17 +242,17 @@ public sealed class Core : MelonMod
 
             MainThreadActions.Enqueue(() =>
             {
-                MelonLogger.Msg($"Download finished: {Path.GetFileName(mp4Path)}. Uploading to Catbox...");
-                Notify("Download finished", "Uploading the MP4 to make a direct URL...", NotificationType.Information, 4f);
+                MelonLogger.Msg($"Download finished: {Path.GetFileName(mp4Path)}. Uploading to Litterbox for 72 hours...");
+                Notify("Download finished", "Uploading to Litterbox for a 72-hour direct URL...", NotificationType.Information, 4f);
             });
 
-            string publicUrl = UploadToCatbox(mp4Path);
+            string publicUrl = UploadToLitterbox(mp4Path);
             MainThreadActions.Enqueue(() =>
             {
                 _lastPublicUrl = publicUrl;
                 GUIUtility.systemCopyBuffer = publicUrl;
                 MelonLogger.Msg($"Public MP4 URL copied: {publicUrl}");
-                Notify("ClipLink Media finished", "Public MP4 URL copied to your clipboard.", NotificationType.Success, 6f);
+                Notify("ClipLink Media finished", "72-hour MP4 URL copied to your clipboard.", NotificationType.Success, 6f);
             });
         }
         catch (Exception ex)
@@ -293,7 +294,7 @@ public sealed class Core : MelonMod
         startInfo.ArgumentList.Add("-f");
         startInfo.ArgumentList.Add("b[ext=mp4]/b");
         startInfo.ArgumentList.Add("--max-filesize");
-        startInfo.ArgumentList.Add("200M");
+        startInfo.ArgumentList.Add("1000M");
         startInfo.ArgumentList.Add("--print-to-file");
         startInfo.ArgumentList.Add("after_move:%(filepath)s");
         startInfo.ArgumentList.Add(resultFile);
@@ -318,26 +319,27 @@ public sealed class Core : MelonMod
 
         long fileSize = new FileInfo(mp4Path).Length;
         if (fileSize > MaxUploadBytes)
-            throw new InvalidOperationException("The MP4 is larger than Catbox's 200 MB upload limit.");
+            throw new InvalidOperationException("The MP4 is larger than Litterbox's 1 GB upload limit.");
 
         return mp4Path;
     }
 
-    private static string UploadToCatbox(string mp4Path)
+    private static string UploadToLitterbox(string mp4Path)
     {
         using var form = new MultipartFormDataContent();
         form.Add(new StringContent("fileupload"), "reqtype");
+        form.Add(new StringContent(LitterboxRetention), "time");
 
         var fileContent = new StreamContent(File.OpenRead(mp4Path));
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
         form.Add(fileContent, "fileToUpload", Path.GetFileName(mp4Path));
 
-        using HttpResponseMessage response = UploadHttpClient.PostAsync(CatboxUploadUrl, form).GetAwaiter().GetResult();
+        using HttpResponseMessage response = UploadHttpClient.PostAsync(LitterboxUploadUrl, form).GetAwaiter().GetResult();
         string responseBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult().Trim();
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"Upload failed ({(int)response.StatusCode}): {LastPart(responseBody, 300)}");
         if (!Uri.TryCreate(responseBody, UriKind.Absolute, out Uri? uri) || uri.Scheme != Uri.UriSchemeHttps)
-            throw new InvalidOperationException($"Catbox returned an invalid URL: {LastPart(responseBody, 300)}");
+            throw new InvalidOperationException($"Litterbox returned an invalid URL: {LastPart(responseBody, 300)}");
 
         return uri.AbsoluteUri;
     }
@@ -428,7 +430,7 @@ public sealed class Core : MelonMod
     private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.1.2");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.1.3");
         return client;
     }
 

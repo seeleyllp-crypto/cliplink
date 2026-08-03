@@ -17,7 +17,11 @@ from tkinter import ttk
 
 
 APP_NAME = "ClipLink"
-MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+APP_VERSION = "1.1"
+LITTERBOX_HOST = "litterbox.catbox.moe"
+LITTERBOX_API_PATH = "/resources/internals/api.php"
+LITTERBOX_RETENTION = "72h"
+MAX_UPLOAD_BYTES = 1_000_000_000
 YOUTUBE_RE = re.compile(r"^https?://(?:www\.|m\.)?(?:youtube\.com|youtu\.be)/", re.I)
 
 
@@ -52,11 +56,11 @@ def choose_temp_root() -> Path:
         seen.add(key)
         try:
             candidate.mkdir(parents=True, exist_ok=True)
-            if shutil.disk_usage(candidate).free >= 500 * 1024 * 1024:
+            if shutil.disk_usage(candidate).free >= 1200 * 1024 * 1024:
                 return candidate
         except OSError:
             continue
-    raise RuntimeError("ClipLink needs at least 500 MB of free disk space on one drive.")
+    raise RuntimeError("ClipLink needs at least 1.2 GB of free disk space on one drive.")
 
 
 class ClipLinkApp:
@@ -112,7 +116,7 @@ class ClipLinkApp:
         self.url_entry = ttk.Entry(card, textvariable=self.url, font=("Segoe UI", 11))
         self.url_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 12), ipady=6)
         ttk.Checkbutton(card, text="I own this video or have permission to download and share it", variable=self.rights_confirmed, style="Card.TCheckbutton").grid(row=2, column=0, columnspan=2, sticky="w", pady=2)
-        ttk.Label(card, text="One click downloads the MP4, uploads it publicly to Catbox, copies the URL, and deletes the temporary MP4. Catbox limit: 200 MB.", style="Hint.TLabel", wraplength=620).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(card, text="One click downloads the MP4, uploads it to Litterbox for 72 hours, copies the URL, and deletes the temporary MP4. Limit: 1 GB.", style="Hint.TLabel", wraplength=620).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         actions = ttk.Frame(main, style="App.TFrame")
         actions.pack(fill="x", pady=(14, 10))
@@ -199,24 +203,27 @@ class ClipLinkApp:
         self.current_process = None
         return code, lines
 
-    def _upload_catbox(self, file_path: Path) -> str:
+    def _upload_litterbox(self, file_path: Path) -> str:
         boundary = "----ClipLink" + secrets.token_hex(16)
         before = (
             f"--{boundary}\r\n"
             'Content-Disposition: form-data; name="reqtype"\r\n\r\n'
             "fileupload\r\n"
             f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="time"\r\n\r\n'
+            f"{LITTERBOX_RETENTION}\r\n"
+            f"--{boundary}\r\n"
             'Content-Disposition: form-data; name="fileToUpload"; filename="video.mp4"\r\n'
             "Content-Type: video/mp4\r\n\r\n"
         ).encode("utf-8")
         after = f"\r\n--{boundary}--\r\n".encode("utf-8")
         total = len(before) + file_path.stat().st_size + len(after)
-        connection = http.client.HTTPSConnection("catbox.moe", timeout=120)
+        connection = http.client.HTTPSConnection(LITTERBOX_HOST, timeout=120)
         try:
-            connection.putrequest("POST", "/user/api.php")
+            connection.putrequest("POST", LITTERBOX_API_PATH)
             connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
             connection.putheader("Content-Length", str(total))
-            connection.putheader("User-Agent", f"{APP_NAME}/1.0")
+            connection.putheader("User-Agent", f"{APP_NAME}/{APP_VERSION}")
             connection.endheaders()
             connection.send(before)
             sent = 0
@@ -235,7 +242,7 @@ class ClipLinkApp:
             response = connection.getresponse()
             body = response.read().decode("utf-8", errors="replace").strip()
             if response.status < 200 or response.status >= 300 or not body.startswith("https://"):
-                raise RuntimeError(f"Catbox upload failed ({response.status}): {body or response.reason}")
+                raise RuntimeError(f"Litterbox upload failed ({response.status}): {body or response.reason}")
             return body
         finally:
             connection.close()
@@ -252,7 +259,7 @@ class ClipLinkApp:
             command = [
                 ytdlp, "--no-playlist", "--windows-filenames", "--newline",
                 "--extractor-args", "youtube:player_client=android_vr,android,ios",
-                "-f", "b[ext=mp4]/b", "--print", "after_move:filepath",
+                "-f", "b[ext=mp4]/b", "--max-filesize", "1000M", "--print", "after_move:filepath",
                 "-o", str(folder / "%(title).120s [%(id)s].%(ext)s"), url,
             ]
             code, lines = self._run_process(command, temp_root=temp_root)
@@ -273,12 +280,12 @@ class ClipLinkApp:
             size = downloaded.stat().st_size
             self.events.put(("log", f"Downloaded temporary MP4 ({size / 1024 / 1024:.1f} MB)."))
             if size > MAX_UPLOAD_BYTES:
-                raise RuntimeError("The MP4 is larger than Catbox's 200 MB upload limit.")
-            self.events.put(("status", "Uploading to Catbox…"))
-            public_url = self._upload_catbox(downloaded)
+                raise RuntimeError("The MP4 is larger than Litterbox's 1 GB upload limit.")
+            self.events.put(("status", "Uploading to Litterbox for 72 hours…"))
+            public_url = self._upload_litterbox(downloaded)
             self.events.put(("result", public_url))
             self.events.put(("copy", public_url))
-            self.events.put(("log", "Public URL created and copied to the clipboard."))
+            self.events.put(("log", "Temporary 72-hour URL created and copied to the clipboard."))
             self.events.put(("done", "Complete"))
         except Exception as exc:
             self.events.put(("error", str(exc)))
