@@ -1,8 +1,8 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "1.1.5",
+  "version_number": "2.0.0",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
-  "description": "Open YouTube, download copied videos, and play them on BONELAB Media Players.",
+  "description": "Turn a copied YouTube link into a public MP4 URL and copy it for BONELAB Media Players.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
     "bonelib-BoneLib-3.2.1"
