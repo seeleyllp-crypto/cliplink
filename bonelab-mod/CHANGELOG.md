@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.0.0
+
+- Added a separate general BONELAB utility toolbox unrelated to the media workflow.
+- Added a session dashboard with clock, scene, uptime, measured FPS, headset position, session reports, and device reports.
+- Added a stopwatch plus 1, 5, 10, and 15-minute countdown timers with completion notifications.
+- Added persistent personal notes and a persistent tally counter.
+- Added coin flips, D6/D10/D20 rolls, random 1-100, and yes/no selection tools.
+- Added local audio levels, target FPS choices, VSync controls, clipboard helpers, and notification tests.
+- Added favorite YouTube videos, a persistent ten-video batch queue, metadata previews, job status, and a downloaded-MP4 library.
+- Preserved signed-out YouTube search, temporary links, local downloads, history, cancellation, diagnostics, and the installed-client-only Fusion OWNER label.
+
 ## 3.1.0
 
 - Added persistent Best, 720p, 480p, and 360p MP4 quality choices.

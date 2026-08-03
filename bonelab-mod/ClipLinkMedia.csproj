@@ -15,6 +15,7 @@
     <Reference Include="BoneLib" HintPath="C:\Program Files (x86)\Steam\steamapps\common\BONELAB\Mods\BoneLib.dll" Private="false" />
     <Reference Include="LabFusion" HintPath="C:\Program Files (x86)\Steam\steamapps\common\BONELAB\Mods\LabFusion.dll" Private="false" />
     <Reference Include="UnityEngine" HintPath="C:\Program Files (x86)\Steam\steamapps\common\BONELAB\MelonLoader\Il2CppAssemblies\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.AudioModule" HintPath="C:\Program Files (x86)\Steam\steamapps\common\BONELAB\MelonLoader\Il2CppAssemblies\UnityEngine.AudioModule.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="C:\Program Files (x86)\Steam\steamapps\common\BONELAB\MelonLoader\Il2CppAssemblies\UnityEngine.CoreModule.dll" Private="false" />
     <Reference Include="UnityEngine.IMGUIModule" HintPath="C:\Program Files (x86)\Steam\steamapps\common\BONELAB\MelonLoader\Il2CppAssemblies\UnityEngine.IMGUIModule.dll" Private="false" />
   </ItemGroup>

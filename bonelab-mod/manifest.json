@@ -1,8 +1,8 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "3.1.0",
+  "version_number": "4.0.0",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
-  "description": "All-in-one YouTube-to-MP4 hub with quality controls, history, repeat jobs, downloads, diagnostics, and a client-side Fusion OWNER tag.",
+  "description": "All-in-one BONELAB media and utility toolbox with queues, favorites, timers, notes, diagnostics, local controls, and a Fusion OWNER tag.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
     "bonelib-BoneLib-3.2.1",

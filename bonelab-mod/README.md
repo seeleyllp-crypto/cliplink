@@ -1,6 +1,6 @@
 # ClipLink Media for BONELAB
 
-ClipLink Media v3.1.0 is an all-in-one Windows PC BONELAB MelonLoader mod. From BoneMenu, it can search YouTube without a login, copy a selected video link, download a permitted video, create a temporary direct MP4 URL for Media Player, save an MP4 locally, remember searches/videos/links, repeat jobs, collect usage statistics, and notify you when each job finishes.
+ClipLink Media v4.0.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It keeps the complete YouTube-to-MP4 workflow and adds a separate general BONELAB utility toolbox with session information, timers, notes, counters, random tools, local audio/FPS controls, reports, and clipboard helpers.
 
 ## All-in-one controls
 
@@ -16,7 +16,23 @@ ClipLink Media v3.1.0 is an all-in-one Windows PC BONELAB MelonLoader mod. From 
 - **Repeat last video** recreates a public URL or local download without searching again.
 - **Setup and folders** checks yt-dlp/Fusion, opens the ClipLink and downloads folders, opens YouTube, and opens the official yt-dlp download.
 - Clipboard tools inspect or open the copied URL, and statistics/setup-report controls help diagnose a problem.
+- **Favorite videos** stores up to 20 favorite YouTube links.
+- **Batch video queue** processes up to 10 videos as public links or local downloads.
+- **Preview copied video** loads title, channel, duration, selected format, resolution, and estimated size without downloading it.
+- **Downloaded MP4 library** lists recent local MP4 files and copies a selected file path.
 - Progress, success, cancellation, and failure notifications appear in game.
+
+## General BONELAB utility toolbox
+
+- Session dashboard: clock, scene, uptime, measured FPS, headset position, session report, and device report.
+- Stopwatch and timers: start/pause/reset stopwatch plus 1/5/10/15-minute countdowns.
+- Notes and tally: save a personal note across launches and keep a persistent counter.
+- Dice and random tools: coin flip, D6, D10, D20, 1-100, and yes/no.
+- Local audio and FPS: mute/25%/50%/75%/100% volume, 72/90/120/unlimited target FPS, and VSync on/off.
+- Clipboard helpers: copy local or UTC timestamps, the current scene, headset position, or a complete session report.
+- Notification tester: test information, success, warning, and error popups.
+
+The utility controls are local. They do not grant Fusion permissions, affect other players, or change network ownership.
 
 ## Use with Media Player
 
@@ -41,7 +57,7 @@ The OWNER label is cosmetic only. It does not grant server ownership, host contr
 
 ## Install yt-dlp from GitHub
 
-The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v3.1.0 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v3.1.0/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
+The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v4.0.0 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v4.0.0/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
 
 In BoneMenu, choose **Setup and folders**, then **Open ClipLink folder**. Move the downloaded `yt-dlp.exe` into that folder. The full path normally ends in `UserData/ClipLinkMedia/yt-dlp.exe`. **Get yt-dlp from GitHub** opens the official download directly, and **Check setup** confirms when it is found.
 
