@@ -1,33 +1,41 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Reflection;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using BoneLib.BoneMenu;
 using BoneLib.Notifications;
 using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.0.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.1.1", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyVersion("2.1.1.0")]
+[assembly: AssemblyFileVersion("2.1.1.0")]
 
 namespace ClipLinkMedia;
 
 public sealed class Core : MelonMod
 {
     private const string YouTubeHome = "https://www.youtube.com/";
+    private const string YtDlpDownloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
     private const string CatboxUploadUrl = "https://catbox.moe/user/api.php";
     private const long MaxUploadBytes = 200L * 1024 * 1024;
     private const long MinimumTemporarySpace = 500L * 1024 * 1024;
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
-    private static readonly HttpClient HttpClient = CreateHttpClient();
+    private static readonly HttpClient UploadHttpClient = CreateUploadHttpClient();
+    private static readonly HttpClient YouTubeHttpClient = CreateYouTubeHttpClient();
     private static string _dataDirectory = string.Empty;
     private static string _ytDlpPath = string.Empty;
     private static string _lastPublicUrl = string.Empty;
+    private static string _searchQuery = "bonelab";
+    private static Page? _searchResultsPage;
     private static bool _rightsConfirmed;
     private static int _jobRunning;
+    private static int _searchRunning;
 
     public override void OnInitializeMelon()
     {
@@ -36,10 +44,10 @@ public sealed class Core : MelonMod
         _ytDlpPath = ResolveYtDlpPath();
 
         BuildBoneMenu();
-        MelonLogger.Msg("Ready. Copy a YouTube URL, confirm permission in BoneMenu, then choose Make public MP4 URL.");
+        MelonLogger.Msg("Ready. Browse YouTube without login in BoneMenu, select a video to copy its link, then choose Make public MP4 URL.");
         MelonLogger.Warning("Catbox uploads are public. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
-            MelonLogger.Error("yt-dlp.exe is missing from the ClipLink Media package.");
+            MelonLogger.Error("yt-dlp.exe is not installed. Use the BoneMenu GitHub download and folder buttons.");
     }
 
     public override void OnUpdate()
@@ -54,10 +62,89 @@ public sealed class Core : MelonMod
     private static void BuildBoneMenu()
     {
         Page page = Page.Root.CreatePage("ClipLink Media", Color.cyan);
-        page.CreateFunction("Open YouTube", Color.red, OpenYouTube);
+        Page browserPage = page.CreatePage("YouTube browser - no login", Color.red);
+        StringElement searchElement = browserPage.CreateString("Search", Color.white, _searchQuery, value => _searchQuery = value.Trim());
+        searchElement.SetTooltip("Select the keyboard button, type a search, and press Enter.");
+        browserPage.CreateFunction("Search YouTube", Color.red, SearchYouTube);
+        _searchResultsPage = browserPage.CreatePage("Video results", Color.cyan);
+        _searchResultsPage.CreateFunction("Search first", Color.gray, SearchYouTube);
+
+        page.CreateFunction("Open YouTube on desktop", Color.red, OpenYouTube);
+        page.CreateFunction("Get yt-dlp from GitHub", Color.yellow, OpenYtDlpDownload);
+        page.CreateFunction("Open yt-dlp folder", Color.yellow, OpenYtDlpFolder);
         page.CreateBool("I own / have permission", Color.yellow, false, value => _rightsConfirmed = value);
         page.CreateFunction("Make public MP4 URL", Color.green, StartClipboardJob);
         page.CreateFunction("Copy last public URL", Color.cyan, CopyLastPublicUrl);
+    }
+
+    private static void SearchYouTube()
+    {
+        string query = _searchQuery.Trim();
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            Warn("Type something in the YouTube search box first.");
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _searchRunning, 1, 0) != 0)
+        {
+            Warn("A YouTube search is already running.");
+            return;
+        }
+
+        MelonLogger.Msg($"Searching signed-out YouTube results for: {query}");
+        Notify("YouTube browser", $"Searching for {ShortMenuText(query, 60)}...", NotificationType.Information, 3f);
+        _ = Task.Run(() => LoadYouTubeResults(query));
+    }
+
+    private static void LoadYouTubeResults(string query)
+    {
+        try
+        {
+            string url = "https://www.youtube.com/results?hl=en&sp=EgIQAQ%3D%3D&search_query=" + Uri.EscapeDataString(query);
+            string html = YouTubeHttpClient.GetStringAsync(url).GetAwaiter().GetResult();
+            List<YouTubeSearchResult> results = YouTubeSearchParser.Parse(html, 12);
+            if (results.Count == 0)
+                throw new InvalidOperationException("YouTube returned no video results. Try another search.");
+
+            MainThreadActions.Enqueue(() => DisplayYouTubeResults(query, results));
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Error($"YouTube search failed: {ex}");
+            FailOnMainThread($"YouTube search failed: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _searchRunning, 0);
+        }
+    }
+
+    private static void DisplayYouTubeResults(string query, List<YouTubeSearchResult> results)
+    {
+        if (_searchResultsPage == null) return;
+
+        _searchResultsPage.RemoveAll();
+        foreach (YouTubeSearchResult choice in results)
+        {
+            YouTubeSearchResult selectedChoice = choice;
+            FunctionElement button = _searchResultsPage.CreateFunction(
+                ShortMenuText(choice.Title, 64),
+                Color.white,
+                () => CopyYouTubeChoice(selectedChoice));
+            button.SetTooltip(choice.Title);
+        }
+
+        MelonLogger.Msg($"Loaded {results.Count} signed-out YouTube results for: {query}");
+        Notify("YouTube browser", $"Loaded {results.Count} videos. Select one to copy its link.", NotificationType.Success, 5f);
+        Menu.OpenPage(_searchResultsPage);
+    }
+
+    private static void CopyYouTubeChoice(YouTubeSearchResult choice)
+    {
+        GUIUtility.systemCopyBuffer = choice.Url;
+        MelonLogger.Msg($"YouTube link copied: {choice.Url} ({choice.Title})");
+        Notify("YouTube link copied", ShortMenuText(choice.Title, 100), NotificationType.Success, 5f);
     }
 
     private static void OpenYouTube()
@@ -70,6 +157,38 @@ public sealed class Core : MelonMod
         catch (Exception ex)
         {
             FailOnMainThread($"Could not open YouTube: {ex.Message}");
+        }
+    }
+
+    private static void OpenYtDlpDownload()
+    {
+        try
+        {
+            Application.OpenURL(YtDlpDownloadUrl);
+            MelonLogger.Msg("Opened the official yt-dlp.exe download on GitHub.");
+            Notify("ClipLink Media", "Download yt-dlp.exe, then put it in the folder opened by the next menu button.", NotificationType.Information, 7f);
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Could not open the yt-dlp download: {ex.Message}");
+        }
+    }
+
+    private static void OpenYtDlpFolder()
+    {
+        try
+        {
+            Directory.CreateDirectory(_dataDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = _dataDirectory,
+                UseShellExecute = true,
+            });
+            MelonLogger.Msg($"Opened yt-dlp folder: {_dataDirectory}");
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Could not open the yt-dlp folder: {ex.Message}");
         }
     }
 
@@ -154,7 +273,7 @@ public sealed class Core : MelonMod
     private static string DownloadVideo(string youtubeUrl, string jobDirectory)
     {
         if (!File.Exists(_ytDlpPath))
-            throw new FileNotFoundException("yt-dlp.exe is missing. Reinstall the complete ClipLink Media package.", _ytDlpPath);
+            throw new FileNotFoundException("yt-dlp.exe is missing. Download it from the official GitHub link in BoneMenu and put it in the ClipLinkMedia folder.", _ytDlpPath);
 
         string resultFile = Path.Combine(jobDirectory, "download-result.txt");
         var startInfo = new ProcessStartInfo
@@ -213,7 +332,7 @@ public sealed class Core : MelonMod
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
         form.Add(fileContent, "fileToUpload", Path.GetFileName(mp4Path));
 
-        using HttpResponseMessage response = HttpClient.PostAsync(CatboxUploadUrl, form).GetAwaiter().GetResult();
+        using HttpResponseMessage response = UploadHttpClient.PostAsync(CatboxUploadUrl, form).GetAwaiter().GetResult();
         string responseBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult().Trim();
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"Upload failed ({(int)response.StatusCode}): {LastPart(responseBody, 300)}");
@@ -306,16 +425,78 @@ public sealed class Core : MelonMod
         return fallback == null ? preferred : Path.Combine(fallback.RootDirectory.FullName, "ClipLinkMediaJobs");
     }
 
-    private static HttpClient CreateHttpClient()
+    private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.0.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.1.1");
         return client;
+    }
+
+    private static HttpClient CreateYouTubeHttpClient()
+    {
+        var handler = new HttpClientHandler
+        {
+            UseCookies = false,
+            AllowAutoRedirect = true,
+            AutomaticDecompression = DecompressionMethods.All,
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127 Safari/537.36");
+        client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
+        return client;
+    }
+
+    private static string ShortMenuText(string value, int maxLength)
+    {
+        string clean = Regex.Replace(value ?? string.Empty, "\\s+", " ").Trim();
+        if (clean.Length <= maxLength) return clean;
+        return clean[..Math.Max(1, maxLength - 3)] + "...";
     }
 
     private static string LastPart(string value, int maxLength)
     {
         if (string.IsNullOrWhiteSpace(value)) return "Unknown error.";
         return value.Length <= maxLength ? value : value[^maxLength..];
+    }
+}
+
+public sealed class YouTubeSearchResult
+{
+    public YouTubeSearchResult(string id, string title)
+    {
+        Id = id;
+        Title = title;
+    }
+
+    public string Id { get; }
+    public string Title { get; }
+    public string Url => $"https://www.youtube.com/watch?v={Id}";
+}
+
+public static class YouTubeSearchParser
+{
+    private static readonly Regex VideoResultPattern = new(
+        "\\\"videoRenderer\\\":\\{\\\"videoId\\\":\\\"(?<id>[A-Za-z0-9_-]{11})\\\".*?\\\"title\\\":\\{\\\"runs\\\":\\[\\{\\\"text\\\":\\\"(?<title>(?:\\\\\\\\.|[^\\\"\\\\\\\\])*)\\\"",
+        RegexOptions.Singleline | RegexOptions.Compiled);
+
+    public static List<YouTubeSearchResult> Parse(string html, int limit)
+    {
+        var results = new List<YouTubeSearchResult>();
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in VideoResultPattern.Matches(html))
+        {
+            string id = match.Groups["id"].Value;
+            if (!seenIds.Add(id)) continue;
+
+            string rawTitle = match.Groups["title"].Value;
+            string title;
+            try { title = JsonSerializer.Deserialize<string>($"\"{rawTitle}\"") ?? rawTitle; }
+            catch { title = rawTitle; }
+            title = Regex.Replace(title, "\\s+", " ").Trim();
+            if (string.IsNullOrWhiteSpace(title)) title = id;
+            results.Add(new YouTubeSearchResult(id, title));
+            if (results.Count >= limit) break;
+        }
+        return results;
     }
 }
