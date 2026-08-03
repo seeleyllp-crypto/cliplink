@@ -8,10 +8,10 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.Video;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.3", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.4", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("1.1.3.0")]
-[assembly: AssemblyFileVersion("1.1.3.0")]
+[assembly: AssemblyVersion("1.1.4.0")]
+[assembly: AssemblyFileVersion("1.1.4.0")]
 
 namespace ClipLinkMedia;
 
@@ -21,12 +21,27 @@ public sealed class Core : MelonMod
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
     private static readonly ConcurrentDictionary<int, byte> ActivePlayers = new();
     private static readonly ConcurrentDictionary<string, string> CachedVideos = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<int, PendingPlayback> PendingPlaybacks = new();
     private static readonly object CacheLock = new();
     private static readonly object DownloadLock = new();
     private static bool _bypassUrlPatch;
     private static string _dataDirectory = string.Empty;
     private static string _cacheDirectory = string.Empty;
     private static string _ytDlpPath = string.Empty;
+
+    private sealed class PendingPlayback
+    {
+        public PendingPlayback(VideoPlayer player, string localPath, float deadline)
+        {
+            Player = player;
+            LocalPath = localPath;
+            Deadline = deadline;
+        }
+
+        public VideoPlayer Player { get; }
+        public string LocalPath { get; }
+        public float Deadline { get; }
+    }
 
     public override void OnInitializeMelon()
     {
@@ -49,6 +64,31 @@ public sealed class Core : MelonMod
         {
             try { action(); }
             catch (Exception ex) { MelonLogger.Error($"Main-thread action failed: {ex}"); }
+        }
+
+        foreach ((int playerId, PendingPlayback pending) in PendingPlaybacks.ToArray())
+        {
+            VideoPlayer player = pending.Player;
+            if (player == null)
+            {
+                PendingPlaybacks.Remove(playerId);
+                ActivePlayers.TryRemove(playerId, out _);
+                continue;
+            }
+
+            if (player.isPrepared)
+            {
+                player.Play();
+                MelonLogger.Msg($"Playback started: {Path.GetFileName(pending.LocalPath)} (renderMode={player.renderMode}, targetTexture={player.targetTexture != null})");
+                PendingPlaybacks.Remove(playerId);
+                ActivePlayers.TryRemove(playerId, out _);
+            }
+            else if (Time.realtimeSinceStartup >= pending.Deadline)
+            {
+                MelonLogger.Error($"VideoPlayer preparation timed out for {Path.GetFileName(pending.LocalPath)} (active={player.isActiveAndEnabled}, url={player.url})");
+                PendingPlaybacks.Remove(playerId);
+                ActivePlayers.TryRemove(playerId, out _);
+            }
         }
     }
 
@@ -132,20 +172,31 @@ public sealed class Core : MelonMod
             string? localPath = DownloadVideo(youtubeUrl);
             MainThreadActions.Enqueue(() =>
             {
+                bool preparationStarted = false;
                 try
                 {
-                    if (player == null || string.IsNullOrEmpty(localPath) || !File.Exists(localPath)) return;
+                    if (player == null || string.IsNullOrEmpty(localPath) || !File.Exists(localPath))
+                        return;
                     string fileUrl = new Uri(localPath).AbsoluteUri;
                     _bypassUrlPatch = true;
+                    player.Stop();
                     player.source = VideoSource.Url;
                     player.url = fileUrl;
-                    player.Play();
-                    MelonLogger.Msg($"Playing downloaded video: {Path.GetFileName(localPath)}");
+                    player.waitForFirstFrame = true;
+                    player.Prepare();
+                    PendingPlaybacks[playerId] = new PendingPlayback(player, localPath, Time.realtimeSinceStartup + 20f);
+                    preparationStarted = true;
+                    MelonLogger.Msg($"Preparing downloaded video: {Path.GetFileName(localPath)}");
+                }
+                catch (Exception ex)
+                {
+                    MelonLogger.Error($"Could not prepare downloaded video: {ex}");
                 }
                 finally
                 {
                     _bypassUrlPatch = false;
-                    ActivePlayers.TryRemove(playerId, out _);
+                    if (!preparationStarted)
+                        ActivePlayers.TryRemove(playerId, out _);
                 }
             });
         });
