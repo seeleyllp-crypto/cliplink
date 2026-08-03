@@ -18,7 +18,7 @@ The mod does not patch Media Player playback. It downloads an MP4 with `yt-dlp`,
 
 ## Install yt-dlp from GitHub
 
-This package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**.
+This package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v2.1.2 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v2.1.2/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
 
 In BoneMenu, choose **Open yt-dlp folder**, then move the downloaded `yt-dlp.exe` into that folder. The full path normally ends in `UserData/ClipLinkMedia/yt-dlp.exe`. You can also choose **Get yt-dlp from GitHub** in BoneMenu to open the official download directly.
 

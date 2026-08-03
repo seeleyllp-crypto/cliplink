@@ -5,6 +5,7 @@
 - Prepared a review-clean Thunderstore package with a nonblank 256x256 icon.
 - The package contains no bundled third-party executable.
 - Kept the official GitHub link for users to download yt-dlp separately.
+- Kept a verified yt-dlp.exe as a separate GitHub release asset, outside the Thunderstore ZIP.
 
 ## 2.1.1
 
