@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0
+
+- Expanded ClipLink Media into an all-in-one BoneMenu hub.
+- Added selectable Litterbox expiry: 1, 12, 24, or 72 hours.
+- Added a local MP4 download mode and a button that opens the downloads folder.
+- Added saved recent public URLs with expiry times, re-copy controls, and cleanup controls.
+- Added copy/open-last-link, current-job cancellation, setup checks, and clearer progress notifications.
+- Kept signed-out YouTube search, clipboard link selection, EXE-free Thunderstore packaging, and separate yt-dlp installation.
+- Kept the installed-client-only Fusion OWNER label without changing the creator's Fusion nickname.
+
 ## 2.2.0
 
 - Added a gold floating OWNER label above the creator's Fusion avatar.
