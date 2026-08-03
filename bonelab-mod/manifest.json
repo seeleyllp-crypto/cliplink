@@ -1,6 +1,6 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "2.1.1",
+  "version_number": "2.1.2",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
   "description": "Browse signed-out YouTube videos in BoneMenu, copy a link, and turn it into a public MP4 URL.",
   "dependencies": [
