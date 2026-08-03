@@ -11,10 +11,10 @@ using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.1.3", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.1.4", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("2.1.3.0")]
-[assembly: AssemblyFileVersion("2.1.3.0")]
+[assembly: AssemblyVersion("2.1.4.0")]
+[assembly: AssemblyFileVersion("2.1.4.0")]
 
 namespace ClipLinkMedia;
 
@@ -430,7 +430,7 @@ public sealed class Core : MelonMod
     private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.1.3");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.1.4");
         return client;
     }
 

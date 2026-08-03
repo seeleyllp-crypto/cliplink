@@ -1,6 +1,6 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "2.1.3",
+  "version_number": "2.1.4",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
   "description": "Browse signed-out YouTube videos in BoneMenu and create a temporary 72-hour Litterbox MP4 URL.",
   "dependencies": [

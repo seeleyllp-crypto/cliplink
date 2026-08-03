@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.4
+
+- Bumped the package version for a new Thunderstore submission.
+- Kept the 72-hour Litterbox upload workflow from v2.1.3.
+
 ## 2.1.3
 
 - Switched MP4 uploads from permanent Catbox storage to Litterbox.
