@@ -7,19 +7,22 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using BoneLib.BoneMenu;
 using BoneLib.Notifications;
+using LabFusion.Entities;
+using LabFusion.UI;
 using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.1.4", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "2.2.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("2.1.4.0")]
-[assembly: AssemblyFileVersion("2.1.4.0")]
+[assembly: AssemblyVersion("2.2.0.0")]
+[assembly: AssemblyFileVersion("2.2.0.0")]
 
 namespace ClipLinkMedia;
 
 public sealed class Core : MelonMod
 {
+    private const ulong OwnerPlatformId = 76561199548494681UL;
     private const string YouTubeHome = "https://www.youtube.com/";
     private const string YtDlpDownloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
     private const string LitterboxUploadUrl = "https://litterbox.catbox.moe/resources/internals/api.php";
@@ -37,6 +40,7 @@ public sealed class Core : MelonMod
     private static bool _rightsConfirmed;
     private static int _jobRunning;
     private static int _searchRunning;
+    private static readonly Dictionary<NetworkPlayer, OwnerTagElement> OwnerTags = new();
 
     public override void OnInitializeMelon()
     {
@@ -45,7 +49,9 @@ public sealed class Core : MelonMod
         _ytDlpPath = ResolveYtDlpPath();
 
         BuildBoneMenu();
+        InitializeFusionOwnerTag();
         MelonLogger.Msg("Ready. Browse YouTube without login in BoneMenu, select a video to copy its link, then choose Make public MP4 URL.");
+        MelonLogger.Msg("Fusion OWNER tag enabled. Players with ClipLink Media installed will see OWNER above the creator's head.");
         MelonLogger.Warning("Litterbox uploads are public and expire after 72 hours. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
             MelonLogger.Error("yt-dlp.exe is not installed. Use the BoneMenu GitHub download and folder buttons.");
@@ -58,6 +64,46 @@ public sealed class Core : MelonMod
             try { action(); }
             catch (Exception ex) { MelonLogger.Error($"Main-thread action failed: {ex}"); }
         }
+    }
+
+    private static void InitializeFusionOwnerTag()
+    {
+        NetworkPlayer.OnNetworkPlayerRegistered += TryAttachOwnerTag;
+
+        foreach (NetworkPlayer player in NetworkPlayer.Players.ToArray())
+            TryAttachOwnerTag(player);
+    }
+
+    private static void TryAttachOwnerTag(NetworkPlayer player)
+    {
+        try
+        {
+            if (player?.PlayerID == null
+                || !player.PlayerID.IsValid
+                || player.PlayerID.PlatformID != OwnerPlatformId
+                || player.PlayerID.IsMe
+                || OwnerTags.ContainsKey(player))
+                return;
+
+            var ownerTag = new OwnerTagElement();
+            OwnerTags.Add(player, ownerTag);
+            player.HeadUI.RegisterElement(ownerTag);
+            player.PlayerID.OnDestroyedEvent += () => RemoveOwnerTag(player);
+            MelonLogger.Msg($"Attached OWNER tag to Fusion player {player.Username} ({player.PlayerID.PlatformID}).");
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not attach Fusion OWNER tag: {ex.Message}");
+        }
+    }
+
+    private static void RemoveOwnerTag(NetworkPlayer player)
+    {
+        if (!OwnerTags.Remove(player, out OwnerTagElement? ownerTag))
+            return;
+
+        try { player.HeadUI.UnregisterElement(ownerTag); }
+        catch (Exception ex) { MelonLogger.Warning($"Could not remove Fusion OWNER tag: {ex.Message}"); }
     }
 
     private static void BuildBoneMenu()
@@ -430,7 +476,7 @@ public sealed class Core : MelonMod
     private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.1.4");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/2.2.0");
         return client;
     }
 
@@ -460,6 +506,29 @@ public sealed class Core : MelonMod
         if (string.IsNullOrWhiteSpace(value)) return "Unknown error.";
         return value.Length <= maxLength ? value : value[^maxLength..];
     }
+}
+
+public sealed class OwnerTagElement : IPopupLayoutElement
+{
+    private readonly RigNameTag _tag = new()
+    {
+        Username = "<color=#FFD700>OWNER</color>",
+        Color = Color.white,
+        CrownVisible = false,
+        Visible = true,
+    };
+
+    public int Priority => -100;
+    public Transform Transform => _tag.Transform;
+
+    public bool Visible
+    {
+        get => _tag.Visible;
+        set => _tag.Visible = value;
+    }
+
+    public void Spawn(Transform parent) => _tag.Spawn(parent);
+    public void Despawn() => _tag.Despawn();
 }
 
 public sealed class YouTubeSearchResult

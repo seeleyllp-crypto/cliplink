@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.0
+
+- Added a gold floating OWNER label above the creator's Fusion avatar.
+- The label is client-side and only appears for viewers who have ClipLink Media installed.
+- The label does not change the creator's Fusion nickname.
+- The OWNER label is cosmetic and does not grant host or moderator permissions.
+
 ## 2.1.4
 
 - Bumped the package version for a new Thunderstore submission.

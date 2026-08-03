@@ -1,10 +1,11 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "2.1.4",
+  "version_number": "2.2.0",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
-  "description": "Browse signed-out YouTube videos in BoneMenu and create a temporary 72-hour Litterbox MP4 URL.",
+  "description": "Create 72-hour Litterbox MP4 URLs and show a cosmetic OWNER tag for the creator in Fusion.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
-    "bonelib-BoneLib-3.2.1"
+    "bonelib-BoneLib-3.2.1",
+    "Lakatrazz-Fusion-1.14.2"
   ]
 }
