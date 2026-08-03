@@ -4,13 +4,14 @@ using System.Reflection;
 using BoneLib.BoneMenu;
 using HarmonyLib;
 using MelonLoader;
+using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.Video;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.2", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "1.1.3", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("1.1.2.0")]
-[assembly: AssemblyFileVersion("1.1.2.0")]
+[assembly: AssemblyVersion("1.1.3.0")]
+[assembly: AssemblyFileVersion("1.1.3.0")]
 
 namespace ClipLinkMedia;
 
@@ -21,6 +22,7 @@ public sealed class Core : MelonMod
     private static readonly ConcurrentDictionary<int, byte> ActivePlayers = new();
     private static readonly ConcurrentDictionary<string, string> CachedVideos = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object CacheLock = new();
+    private static readonly object DownloadLock = new();
     private static bool _bypassUrlPatch;
     private static string _dataDirectory = string.Empty;
     private static string _cacheDirectory = string.Empty;
@@ -28,7 +30,7 @@ public sealed class Core : MelonMod
 
     public override void OnInitializeMelon()
     {
-        _dataDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "UserData", "ClipLinkMedia");
+        _dataDirectory = Path.Combine(MelonEnvironment.UserDataDirectory, "ClipLinkMedia");
         Directory.CreateDirectory(_dataDirectory);
         _cacheDirectory = ChooseCacheDirectory();
         Directory.CreateDirectory(_cacheDirectory);
@@ -122,10 +124,7 @@ public sealed class Core : MelonMod
     {
         int playerId = player.GetInstanceID();
         if (!ActivePlayers.TryAdd(playerId, 0))
-        {
-            MelonLogger.Warning("This Media Player is already downloading a video.");
             return;
-        }
 
         MelonLogger.Msg($"Downloading for Media Player: {youtubeUrl}");
         _ = Task.Run(() =>
@@ -154,6 +153,12 @@ public sealed class Core : MelonMod
 
     private static string? DownloadVideo(string youtubeUrl)
     {
+        lock (DownloadLock)
+            return DownloadVideoLocked(youtubeUrl);
+    }
+
+    private static string? DownloadVideoLocked(string youtubeUrl)
+    {
         if (CachedVideos.TryGetValue(youtubeUrl, out string? cached) && File.Exists(cached))
         {
             MelonLogger.Msg($"Using cached video: {Path.GetFileName(cached)}");
@@ -165,11 +170,9 @@ public sealed class Core : MelonMod
             return null;
         }
 
+        string resultFile = Path.Combine(_dataDirectory, $"download-{Guid.NewGuid():N}.txt");
         try
         {
-            string resultFile = Path.Combine(_dataDirectory, "last-download.txt");
-            if (File.Exists(resultFile)) File.Delete(resultFile);
-
             var startInfo = new ProcessStartInfo
             {
                 FileName = _ytDlpPath,
@@ -222,6 +225,11 @@ public sealed class Core : MelonMod
             MelonLogger.Error($"Download failed: {ex}");
             return null;
         }
+        finally
+        {
+            try { if (File.Exists(resultFile)) File.Delete(resultFile); }
+            catch { }
+        }
     }
 
     private static bool IsYouTubeUrl(string? value)
@@ -236,8 +244,7 @@ public sealed class Core : MelonMod
         string legacyPath = Path.Combine(_dataDirectory, "yt-dlp.exe");
         if (File.Exists(legacyPath)) return legacyPath;
 
-        string gameDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        string userDataDirectory = Path.Combine(gameDirectory, "UserData");
+        string userDataDirectory = MelonEnvironment.UserDataDirectory;
         if (Directory.Exists(userDataDirectory))
         {
             try
