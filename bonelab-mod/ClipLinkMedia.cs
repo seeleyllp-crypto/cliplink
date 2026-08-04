@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using BoneLib;
 using BoneLib.BoneMenu;
 using BoneLib.Notifications;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using LabFusion.Entities;
 using LabFusion.Marrow.Pool;
 using LabFusion.Network;
@@ -22,16 +23,16 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.3.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.4.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("5.3.0.0")]
-[assembly: AssemblyFileVersion("5.3.0.0")]
+[assembly: AssemblyVersion("5.4.0.0")]
+[assembly: AssemblyFileVersion("5.4.0.0")]
 
 namespace ClipLinkMedia;
 
 public sealed class Core : MelonMod
 {
-    private const string ModVersion = "5.3.0";
+    private const string ModVersion = "5.4.0";
     private const ulong OwnerPlatformId = 76561199548494681UL;
     private const string YouTubeHome = "https://www.youtube.com/";
     private const string YtDlpDownloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
@@ -52,6 +53,7 @@ public sealed class Core : MelonMod
     private const int MaximumFavorites = 20;
     private const int MaximumQueuedVideos = 10;
     private const int MaximumDownloadLibraryEntries = 20;
+    private const int MaximumThumbnailCacheEntries = 48;
     private const long MaxUploadBytes = 1_000_000_000L;
     private const long MinimumTemporarySpace = 1200L * 1024 * 1024;
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
@@ -62,6 +64,11 @@ public sealed class Core : MelonMod
     private static readonly Dictionary<NetworkPlayer, OwnerTagElement> OwnerTags = new();
     private static readonly object PresenceGate = new();
     private static readonly Dictionary<byte, ClipLinkPresenceInfo> ClipLinkUsers = new();
+    private static readonly object ThumbnailGate = new();
+    private static readonly Dictionary<string, Texture2D> ThumbnailCache = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, List<FunctionElement>> PendingThumbnailButtons = new(StringComparer.Ordinal);
+    private static readonly Queue<string> ThumbnailCacheOrder = new();
+    private static readonly SemaphoreSlim ThumbnailDownloadSlots = new(3, 3);
     private static readonly List<LinkHistoryEntry> LinkHistory = new();
     private static string _dataDirectory = string.Empty;
     private static string _downloadsDirectory = string.Empty;
@@ -79,6 +86,8 @@ public sealed class Core : MelonMod
     private static Page? _favoritesPage;
     private static Page? _queuePage;
     private static Page? _downloadsPage;
+    private static Texture2D? _youtubeBackground;
+    private static Texture2D? _youtubeLogo;
     private static ClipLinkSettings _settings = new();
     private static CancellationTokenSource? _jobCancellation;
     private static string _jobStatus = "Idle";
@@ -315,24 +324,113 @@ public sealed class Core : MelonMod
                 : $"Fusion player {smallId}";
     }
 
+    private static void ApplyYouTubeTheme(Page page, bool videoGrid = false)
+    {
+        EnsureYouTubeTextures();
+        page.Color = new Color(1f, 0f, 0f);
+        page.Background = _youtubeBackground;
+        page.BackgroundOpacity = 0.96f;
+        page.Logo = _youtubeLogo;
+        page.ElementSpacing = videoGrid ? 108f : 62f;
+    }
+
+    private static void EnsureYouTubeTextures()
+    {
+        if (_youtubeBackground == null)
+        {
+            _youtubeBackground = new Texture2D(64, 64, TextureFormat.RGBA32, false)
+            {
+                name = "ClipLink YouTube Background",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+            for (int y = 0; y < 64; y++)
+            {
+                for (int x = 0; x < 64; x++)
+                {
+                    bool header = y >= 56;
+                    bool subtleRow = !header && ((y / 8) % 2 == 0);
+                    Color color = header
+                        ? new Color(0.85f, 0.02f, 0.02f, 1f)
+                        : subtleRow
+                            ? new Color(0.055f, 0.055f, 0.06f, 1f)
+                            : new Color(0.035f, 0.035f, 0.04f, 1f);
+                    _youtubeBackground.SetPixel(x, y, color);
+                }
+            }
+            _youtubeBackground.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+        }
+
+        if (_youtubeLogo == null)
+        {
+            _youtubeLogo = new Texture2D(96, 64, TextureFormat.RGBA32, false)
+            {
+                name = "ClipLink YouTube Logo",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+            for (int y = 0; y < 64; y++)
+            {
+                for (int x = 0; x < 96; x++)
+                {
+                    bool redBody = x >= 4 && x <= 91 && y >= 7 && y <= 56;
+                    bool whitePlay = x >= 38 && x <= 70 && Math.Abs(y - 32) <= (x - 38) * 0.72f;
+                    Color color = whitePlay
+                        ? Color.white
+                        : redBody
+                            ? new Color(1f, 0f, 0f, 1f)
+                            : new Color(0f, 0f, 0f, 0f);
+                    _youtubeLogo.SetPixel(x, y, color);
+                }
+            }
+            _youtubeLogo.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+        }
+    }
+
+    private static void SetYouTubeSearchAndRun(string query)
+    {
+        _searchQuery = query;
+        SearchYouTube();
+    }
+
     private static void BuildBoneMenu()
     {
         Page page = Page.Root.CreatePage("ClipLink Media", Color.cyan);
-        Page browserPage = page.CreatePage("YouTube browser - no login", Color.red);
+        Page browserPage = page.CreatePage("YouTube - no login", new Color(1f, 0f, 0f));
+        ApplyYouTubeTheme(browserPage);
+        FunctionElement youtubeHeader = browserPage.CreateFunction(
+            "YouTube | Signed out",
+            Color.white,
+            () => Notify("YouTube", "Signed-out visual browser. Search or choose Explore; selecting a thumbnail copies its normal YouTube URL.", NotificationType.Information, 7f));
+        youtubeHeader.Logo = _youtubeLogo;
+        youtubeHeader.SetTooltip("YouTube-style browser | No login, cookies, API key, or account required.");
         StringElement searchElement = browserPage.CreateString("Search", Color.white, _searchQuery, value => _searchQuery = value.Trim());
         searchElement.SetTooltip("Select the keyboard button, type a search, and press Enter.");
         browserPage.CreateFunction("Search YouTube", Color.red, SearchYouTube);
-        _searchResultsPage = browserPage.CreatePage("Video results", Color.cyan);
+        Page explorePage = browserPage.CreatePage("Explore", Color.red);
+        ApplyYouTubeTheme(explorePage);
+        explorePage.CreateFunction("BONELAB", Color.white, () => SetYouTubeSearchAndRun("BONELAB VR gameplay"));
+        explorePage.CreateFunction("VR gaming", Color.white, () => SetYouTubeSearchAndRun("VR gaming"));
+        explorePage.CreateFunction("Gaming", Color.white, () => SetYouTubeSearchAndRun("gaming"));
+        explorePage.CreateFunction("Music", Color.white, () => SetYouTubeSearchAndRun("music"));
+        explorePage.CreateFunction("Trending videos", Color.white, () => SetYouTubeSearchAndRun("trending videos"));
+        explorePage.CreateFunction("Media Player tutorials", Color.white, () => SetYouTubeSearchAndRun("BONELAB Media Player mod tutorial"));
+        _searchResultsPage = browserPage.CreatePage("Videos", Color.red);
+        ApplyYouTubeTheme(_searchResultsPage, videoGrid: true);
         _searchResultsPage.CreateFunction("Search first", Color.gray, SearchYouTube);
         _recentVideosPage = browserPage.CreatePage("Recently selected videos", Color.cyan);
+        ApplyYouTubeTheme(_recentVideosPage, videoGrid: true);
         RefreshRecentVideosPage();
         _searchHistoryPage = browserPage.CreatePage("Recent searches", Color.yellow);
+        ApplyYouTubeTheme(_searchHistoryPage);
         RefreshSearchHistoryPage();
         _favoritesPage = browserPage.CreatePage("Favorite videos", Color.magenta);
+        ApplyYouTubeTheme(_favoritesPage, videoGrid: true);
         RefreshFavoritesPage();
         browserPage.CreateFunction("Add copied video to favorites", Color.magenta, AddCopiedFavorite);
         browserPage.CreateFunction("Preview copied video", Color.green, PreviewCopiedVideo);
         browserPage.CreateFunction("Copy last preview info", Color.white, CopyLastPreview);
+        browserPage.CreateFunction("Open full YouTube on desktop", Color.red, OpenYouTube);
 
         page.CreateBool("I own / have permission", Color.yellow, false, value => _rightsConfirmed = value);
         page.CreateFunction("Make public MP4 URL", Color.green, StartClipboardJob);
@@ -1060,7 +1158,7 @@ public sealed class Core : MelonMod
             string local = smallId == PlayerIDManager.LocalSmallID ? " [YOU]" : string.Empty;
             lines.Add($"- {GetFusionPlayerName(smallId)}{local} | v{presence.Version}");
         }
-        lines.Add("Only players with ClipLink Media v5.3.0 or newer can answer this check.");
+        lines.Add($"Only players with ClipLink Media v{ModVersion} or newer can answer this check.");
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -1570,7 +1668,8 @@ public sealed class Core : MelonMod
             {
                 RecentVideoEntry selectedEntry = entry;
                 FunctionElement button = _recentVideosPage.CreateFunction(ShortMenuText(entry.Title, 64), Color.white, () => CopyRecentVideo(selectedEntry));
-                button.SetTooltip($"Selected: {entry.SelectedUtc.LocalDateTime:g}\n{entry.Url}");
+                button.SetTooltip($"{entry.Title}\nSelected: {entry.SelectedUtc.LocalDateTime:g}\nSelect the thumbnail to copy:\n{entry.Url}");
+                AttachYouTubeThumbnail(button, GetYouTubeVideoId(entry.Url));
             }
         }
 
@@ -1630,7 +1729,8 @@ public sealed class Core : MelonMod
             {
                 RecentVideoEntry selectedEntry = entry;
                 FunctionElement button = _favoritesPage.CreateFunction(ShortMenuText(entry.Title, 64), Color.white, () => CopyFavorite(selectedEntry));
-                button.SetTooltip(entry.Url);
+                button.SetTooltip($"{entry.Title}\nSelect the thumbnail to copy:\n{entry.Url}");
+                AttachYouTubeThumbnail(button, GetYouTubeVideoId(entry.Url));
             }
         }
         _favoritesPage.CreateFunction("Remove copied favorite", Color.yellow, RemoveCopiedFavorite);
@@ -1886,6 +1986,7 @@ public sealed class Core : MelonMod
         if (_searchResultsPage == null) return;
 
         _searchResultsPage.RemoveAll();
+        _searchResultsPage.Name = $"YouTube | {ShortMenuText(query, 34)}";
         foreach (YouTubeSearchResult choice in results)
         {
             YouTubeSearchResult selectedChoice = choice;
@@ -1893,12 +1994,109 @@ public sealed class Core : MelonMod
                 ShortMenuText(choice.Title, 64),
                 Color.white,
                 () => CopyYouTubeChoice(selectedChoice));
-            button.SetTooltip(choice.Title);
+            button.SetTooltip($"{choice.Title}\nSelect this thumbnail to copy:\n{choice.Url}");
+            AttachYouTubeThumbnail(button, choice.Id);
         }
 
         MelonLogger.Msg($"Loaded {results.Count} signed-out YouTube results for: {query}");
-        Notify("YouTube browser", $"Loaded {results.Count} videos. Select one to copy its link.", NotificationType.Success, 5f);
+        Notify("YouTube", $"Loaded {results.Count} thumbnail cards. Select a video to copy its link.", NotificationType.Success, 6f);
         Menu.OpenPage(_searchResultsPage);
+    }
+
+    private static void AttachYouTubeThumbnail(FunctionElement button, string videoId)
+    {
+        if (string.IsNullOrWhiteSpace(videoId)) return;
+
+        bool startDownload = false;
+        lock (ThumbnailGate)
+        {
+            if (ThumbnailCache.TryGetValue(videoId, out Texture2D? cached) && cached != null)
+            {
+                button.Logo = cached;
+                return;
+            }
+
+            if (!PendingThumbnailButtons.TryGetValue(videoId, out List<FunctionElement>? buttons))
+            {
+                buttons = new List<FunctionElement>();
+                PendingThumbnailButtons[videoId] = buttons;
+                startDownload = true;
+            }
+            buttons.Add(button);
+        }
+
+        if (startDownload)
+            _ = Task.Run(() => DownloadYouTubeThumbnail(videoId));
+    }
+
+    private static async Task DownloadYouTubeThumbnail(string videoId)
+    {
+        await ThumbnailDownloadSlots.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            string thumbnailUrl = $"https://i.ytimg.com/vi/{videoId}/hqdefault.jpg";
+            byte[] bytes = await YouTubeHttpClient.GetByteArrayAsync(thumbnailUrl).ConfigureAwait(false);
+            if (bytes.Length < 256)
+                throw new InvalidOperationException("YouTube returned an empty thumbnail.");
+            MainThreadActions.Enqueue(() => CompleteYouTubeThumbnail(videoId, bytes));
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not load YouTube thumbnail {videoId}: {ex.Message}");
+            MainThreadActions.Enqueue(() => CompleteYouTubeThumbnail(videoId, null));
+        }
+        finally
+        {
+            ThumbnailDownloadSlots.Release();
+        }
+    }
+
+    private static void CompleteYouTubeThumbnail(string videoId, byte[]? bytes)
+    {
+        List<FunctionElement> buttons;
+        lock (ThumbnailGate)
+        {
+            if (!PendingThumbnailButtons.Remove(videoId, out List<FunctionElement>? pending))
+                return;
+            buttons = pending;
+        }
+
+        if (bytes == null) return;
+
+        try
+        {
+            var texture = new Texture2D(2, 2, TextureFormat.RGB24, false)
+            {
+                name = $"YouTube Thumbnail {videoId}",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+            Il2CppStructArray<byte> imageBytes = bytes;
+            bool loaded = ImageConversion.LoadImage(texture, imageBytes, markNonReadable: true);
+            if (!loaded)
+            {
+                UnityEngine.Object.Destroy(texture);
+                return;
+            }
+
+            lock (ThumbnailGate)
+            {
+                if (ThumbnailCache.Count >= MaximumThumbnailCacheEntries && ThumbnailCacheOrder.Count > 0)
+                {
+                    string oldest = ThumbnailCacheOrder.Dequeue();
+                    ThumbnailCache.Remove(oldest);
+                }
+                ThumbnailCache[videoId] = texture;
+                ThumbnailCacheOrder.Enqueue(videoId);
+            }
+
+            foreach (FunctionElement button in buttons)
+                button.Logo = texture;
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not render YouTube thumbnail {videoId}: {ex.Message}");
+        }
     }
 
     private static void CopyYouTubeChoice(YouTubeSearchResult choice)
@@ -2977,7 +3175,7 @@ public sealed class Core : MelonMod
             AutomaticDecompression = DecompressionMethods.All,
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127 Safari/537.36 ClipLinkMedia/5.3.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127 Safari/537.36 ClipLinkMedia/{ModVersion}");
         client.DefaultRequestHeaders.Accept.ParseAdd("text/plain");
         client.DefaultRequestHeaders.Accept.ParseAdd("*/*");
         client.DefaultRequestHeaders.Referrer = new Uri("https://litterbox.catbox.moe/");
@@ -3008,7 +3206,7 @@ public sealed class Core : MelonMod
             AutomaticDecompression = DecompressionMethods.All,
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.3.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"ClipLinkMedia/{ModVersion}");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }

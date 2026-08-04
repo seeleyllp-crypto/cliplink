@@ -1,8 +1,8 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "5.3.0",
+  "version_number": "5.4.0",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
-  "description": "BONELAB media toolbox with Fusion ClipLink-user detection, synced Media Player spawns, resilient downloads/uploads, and diagnostics.",
+  "description": "BONELAB media toolbox with a visual YouTube-style thumbnail GUI, Fusion user detection, synced Media Player spawns, and resilient uploads.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
     "bonelib-BoneLib-3.2.1",

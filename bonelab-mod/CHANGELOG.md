@@ -1,5 +1,14 @@
 # Changelog
 
+## 5.4.0
+
+- Rebuilt the signed-out YouTube browser as a visual YouTube-style BoneMenu interface that remains clickable in VR.
+- Added a dark video-browser background, red header, generated play logo, larger video-card spacing, and real 16:9 thumbnails from YouTube's thumbnail host.
+- Selecting a thumbnail copies the video's normal YouTube URL exactly like the previous title button, so the existing workflow is preserved.
+- Added an Explore page for BONELAB, VR gaming, Gaming, Music, trending videos, and Media Player tutorials.
+- Added thumbnail cards to recently selected videos and favorites, with titles and URLs retained in each card's info tooltip.
+- Kept the browser signed out: it uses no Google login, cookies, API key, or embedded account session.
+
 ## 5.3.0
 
 - Added a Fusion presence handshake that confirms which current lobby players are running ClipLink Media v5.3.0 or newer.
