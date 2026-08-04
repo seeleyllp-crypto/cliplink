@@ -1,8 +1,8 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "5.0.0",
+  "version_number": "5.1.0",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
-  "description": "Practical BONELAB media/support toolbox with health checks, logs, backups, screenshots, monitoring, queues, and Fusion diagnostics.",
+  "description": "Practical BONELAB media/support toolbox with an in-menu Media Player spawner, downloads, health checks, backups, and Fusion diagnostics.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
     "bonelib-BoneLib-3.2.1",

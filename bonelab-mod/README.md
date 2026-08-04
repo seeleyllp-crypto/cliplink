@@ -1,6 +1,6 @@
 # ClipLink Media for BONELAB
 
-ClipLink Media v5.0.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It keeps the complete YouTube-to-MP4 workflow and adds practical troubleshooting, support, maintenance, Fusion diagnostics, monitoring, screenshot, backup, and connectivity tools.
+ClipLink Media v5.1.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It keeps the complete YouTube-to-MP4 workflow, adds an in-menu spawner for the Elijoe Media Player content mod, and includes practical troubleshooting, support, maintenance, Fusion diagnostics, monitoring, screenshot, backup, and connectivity tools.
 
 ## All-in-one controls
 
@@ -20,6 +20,9 @@ ClipLink Media v5.0.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It ke
 - **Batch video queue** processes up to 10 videos as public links or local downloads.
 - **Preview copied video** loads title, channel, duration, selected format, resolution, and estimated size without downloading it.
 - **Downloaded MP4 library** lists recent local MP4 files and copies a selected file path.
+- **Spawn media player** places the installed Elijoe Media Player in front of your headset without opening the spawn gun menu.
+- **Media player spawner** also offers flatscreen, CRT, phone, computer-monitor, and boom-box variants.
+- **Use last MP4 URL + spawn** copies the latest generated direct MP4 URL before spawning the player.
 - Progress, success, cancellation, and failure notifications appear in game.
 
 ## General BONELAB utility toolbox
@@ -46,11 +49,11 @@ The utility controls are local. They do not grant Fusion permissions, affect oth
 5. Optionally choose **MP4 quality** and **Public-link expiry**.
 6. Choose **Make public MP4 URL**.
 7. Wait for the completion notification. The direct MP4 URL is now in the Windows clipboard.
-8. Paste that URL into the mod.io Media Player, including while using Fusion.
+8. Select **Spawn media player**, grab the spawned player, and press **B** to load the copied direct link. You can instead use **Use last MP4 URL + spawn** to recopy the newest link automatically.
 
 The browser uses signed-out public requests: no Google login, cookies, or API key are used. It shows clickable video titles instead of embedding the complete YouTube site. **Open YouTube on desktop** is available as a fallback.
 
-The mod does not patch or redistribute Media Player. It prepares and copies a compatible direct link for you to paste into Media Player.
+The mod does not patch or redistribute Media Player. It uses the installed `Elijoe.MediaPlayer` content pallet's real barcode and shows a warning if that content mod is unavailable.
 
 ## Fusion OWNER tag
 
@@ -60,7 +63,7 @@ The OWNER label is cosmetic only. It does not grant server ownership, host contr
 
 ## Install yt-dlp from GitHub
 
-The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v5.0.0 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v5.0.0/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
+The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v5.1.0 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v5.1.0/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
 
 In BoneMenu, choose **Setup and folders**, then **Open ClipLink folder**. Move the downloaded `yt-dlp.exe` into that folder. The full path normally ends in `UserData/ClipLinkMedia/yt-dlp.exe`. **Get yt-dlp from GitHub** opens the official download directly, and **Check setup** confirms when it is found.
 

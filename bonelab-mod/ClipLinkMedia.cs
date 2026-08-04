@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using BoneLib;
 using BoneLib.BoneMenu;
 using BoneLib.Notifications;
 using LabFusion.Entities;
@@ -14,10 +15,10 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.0.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.1.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("5.0.0.0")]
-[assembly: AssemblyFileVersion("5.0.0.0")]
+[assembly: AssemblyVersion("5.1.0.0")]
+[assembly: AssemblyFileVersion("5.1.0.0")]
 
 namespace ClipLinkMedia;
 
@@ -29,6 +30,13 @@ public sealed class Core : MelonMod
     private const string LitterboxUploadUrl = "https://litterbox.catbox.moe/resources/internals/api.php";
     private const string LatestReleaseApiUrl = "https://api.github.com/repos/seeleyllp-crypto/cliplink/releases/latest";
     private const string ReleasesPageUrl = "https://github.com/seeleyllp-crypto/cliplink/releases";
+    private const string MediaPlayerPalletFolder = "Elijoe.MediaPlayer";
+    private const string MediaPlayerBarcode = "Elijoe.MediaPlayer.Spawnable.MediaPlayer";
+    private const string FlatScreenMediaPlayerBarcode = "Elijoe.MediaPlayer.Spawnable.FlatscreenMediaPlayer";
+    private const string CrtMediaPlayerBarcode = "Elijoe.MediaPlayer.Spawnable.CRTTV";
+    private const string PhoneMediaPlayerBarcode = "Elijoe.MediaPlayer.Spawnable.PhoneMediaPlayer";
+    private const string ComputerMediaPlayerBarcode = "Elijoe.MediaPlayer.Spawnable.ComputerMonitor";
+    private const string BoomBoxMediaPlayerBarcode = "Elijoe.MediaPlayer.Spawnable.BoomBox";
     private const string DefaultLitterboxRetention = "72h";
     private const int MaximumHistoryEntries = 8;
     private const int MaximumRecentVideos = 12;
@@ -103,7 +111,7 @@ public sealed class Core : MelonMod
 
         BuildBoneMenu();
         InitializeFusionOwnerTag();
-        MelonLogger.Msg($"All-in-one v5 ready with media tools and practical BONELAB diagnostics/support utilities. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
+        MelonLogger.Msg($"All-in-one v5.1 ready with media-player spawning and practical BONELAB diagnostics/support utilities. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
         MelonLogger.Msg("Fusion OWNER tag enabled. Players with ClipLink Media installed will see OWNER above the creator's head.");
         MelonLogger.Warning("Litterbox uploads are public and temporary. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
@@ -223,6 +231,17 @@ public sealed class Core : MelonMod
         _downloadsPage = page.CreatePage("Downloaded MP4 library", Color.cyan);
         RefreshDownloadsPage();
 
+        page.CreateFunction("Spawn media player", Color.blue, () => SpawnMediaPlayer(MediaPlayerBarcode, "Media Player"));
+        Page mediaPlayerPage = page.CreatePage("Media player spawner", Color.blue);
+        mediaPlayerPage.CreateFunction("Spawn media player", Color.green, () => SpawnMediaPlayer(MediaPlayerBarcode, "Media Player"));
+        mediaPlayerPage.CreateFunction("Use last MP4 URL + spawn", Color.cyan, SpawnMediaPlayerWithLastUrl);
+        mediaPlayerPage.CreateFunction("Spawn flatscreen TV", Color.cyan, () => SpawnMediaPlayer(FlatScreenMediaPlayerBarcode, "Flatscreen Media Player"));
+        mediaPlayerPage.CreateFunction("Spawn CRT TV", Color.yellow, () => SpawnMediaPlayer(CrtMediaPlayerBarcode, "CRT TV"));
+        mediaPlayerPage.CreateFunction("Spawn phone player", Color.magenta, () => SpawnMediaPlayer(PhoneMediaPlayerBarcode, "Phone Media Player"));
+        mediaPlayerPage.CreateFunction("Spawn computer monitor", Color.white, () => SpawnMediaPlayer(ComputerMediaPlayerBarcode, "Computer Monitor"));
+        mediaPlayerPage.CreateFunction("Spawn boom box", Color.green, () => SpawnMediaPlayer(BoomBoxMediaPlayerBarcode, "Boom Box"));
+        mediaPlayerPage.CreateFunction("Check media-player setup", Color.white, CheckMediaPlayerSetup);
+
         BuildUtilityToolbox(page);
 
         Page repeatPage = page.CreatePage("Repeat last video", Color.green);
@@ -230,6 +249,7 @@ public sealed class Core : MelonMod
         repeatPage.CreateFunction("Download MP4 again", Color.cyan, StartLastLocalJob);
         repeatPage.CreateFunction("Copy last YouTube link", Color.white, CopyLastSourceUrl);
         repeatPage.CreateFunction("Open last YouTube video", Color.red, OpenLastSourceUrl);
+        repeatPage.CreateFunction("Copy MP4 URL + spawn player", Color.blue, SpawnMediaPlayerWithLastUrl);
 
         Page qualityPage = page.CreatePage("MP4 quality", Color.magenta);
         qualityPage.CreateFunction("Show current quality", Color.white, ShowCurrentQuality);
@@ -263,6 +283,84 @@ public sealed class Core : MelonMod
         toolsPage.CreateFunction("Show job and queue status", Color.yellow, ShowJobStatus);
         toolsPage.CreateFunction("Copy setup report", Color.green, CopySetupReport);
     }
+
+    private static void SpawnMediaPlayerWithLastUrl()
+    {
+        if (string.IsNullOrWhiteSpace(_lastPublicUrl))
+        {
+            Warn("Create a public MP4 URL first, then use this button.");
+            return;
+        }
+
+        GUIUtility.systemCopyBuffer = _lastPublicUrl;
+        SpawnMediaPlayer(MediaPlayerBarcode, "Media Player");
+    }
+
+    private static void SpawnMediaPlayer(string barcode, string displayName)
+    {
+        string palletPath = GetMediaPlayerPalletPath();
+        if (!File.Exists(palletPath))
+        {
+            Warn("The Elijoe Media Player content mod is not installed or enabled.");
+            MelonLogger.Warning($"Media Player pallet was not found at {palletPath}");
+            return;
+        }
+
+        Transform? head = BoneLib.Player.Head;
+        if (head == null)
+        {
+            Warn("The player rig is not ready. Enter a level and try again.");
+            return;
+        }
+
+        Vector3 flatForward = Vector3.ProjectOnPlane(head.forward, Vector3.up);
+        if (flatForward.sqrMagnitude < 0.001f)
+            flatForward = head.forward;
+        flatForward.Normalize();
+
+        Vector3 spawnPosition = head.position + (flatForward * 1.75f) - (Vector3.up * 1.15f);
+        Quaternion spawnRotation = Quaternion.LookRotation(-flatForward, Vector3.up);
+
+        try
+        {
+            HelperMethods.SpawnCrate(
+                barcode,
+                spawnPosition,
+                spawnRotation,
+                Vector3.one,
+                false,
+                spawned =>
+                {
+                    if (spawned == null) return;
+                    Notify("Media player spawned", $"{displayName} is in front of you. Grab it and press B to use the copied direct MP4 URL.", NotificationType.Success, 7f);
+                });
+            MelonLogger.Msg($"Requested {displayName} spawn with barcode {barcode} at {spawnPosition}.");
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Error($"Could not spawn {displayName}: {ex}");
+            Warn($"Could not spawn {displayName}: {LastPart(ex.Message, 100)}");
+        }
+    }
+
+    private static void CheckMediaPlayerSetup()
+    {
+        string palletPath = GetMediaPlayerPalletPath();
+        if (!File.Exists(palletPath))
+        {
+            Warn("Elijoe Media Player is missing or disabled in BONELAB's content mods.");
+            return;
+        }
+
+        Notify(
+            "Media Player ready",
+            "The Elijoe Media Player pallet is installed. Spawn it, copy a direct MP4 URL, grab the player, and press B.",
+            NotificationType.Success,
+            8f);
+    }
+
+    private static string GetMediaPlayerPalletPath() =>
+        Path.Combine(Application.persistentDataPath, "Mods", MediaPlayerPalletFolder, $"{MediaPlayerPalletFolder}.pallet.json");
 
     private static void BuildUtilityToolbox(Page rootPage)
     {
@@ -413,7 +511,7 @@ public sealed class Core : MelonMod
             $"VSync: {(QualitySettings.vSyncCount > 0 ? "On" : "Off")}",
             $"Local audio: {AudioListener.volume * 100f:0}%",
             $"Unity: {Application.unityVersion}",
-            $"ClipLink Media: 5.0.0",
+            $"ClipLink Media: 5.1.0",
         });
         GUIUtility.systemCopyBuffer = report;
         MelonLogger.Msg(report);
@@ -821,7 +919,7 @@ public sealed class Core : MelonMod
         });
         string report = string.Join(Environment.NewLine + Environment.NewLine, new[]
         {
-            "CLIPLINK MEDIA COMPLETE SUPPORT REPORT v5.0.0",
+            "CLIPLINK MEDIA COMPLETE SUPPORT REPORT v5.1.0",
             health,
             session,
             BuildFusionPlayerList(),
@@ -911,7 +1009,7 @@ public sealed class Core : MelonMod
             {
                 _latestReleaseUrl = url;
                 bool current = Version.TryParse(tag.TrimStart('v'), out Version? latestVersion)
-                            && Version.TryParse("5.0.0", out Version? currentVersion)
+                            && Version.TryParse("5.1.0", out Version? currentVersion)
                             && currentVersion.CompareTo(latestVersion) >= 0;
                 Notify("ClipLink update check", current ? $"You are current ({tag})." : $"Latest release: {tag}. Open latest release to update.", current ? NotificationType.Success : NotificationType.Warning, 7f);
             });
@@ -2028,7 +2126,7 @@ public sealed class Core : MelonMod
         string report = string.Join(Environment.NewLine, new[]
         {
             "ClipLink Media setup report",
-            "Version: 5.0.0",
+            "Version: 5.1.0",
             $"yt-dlp: {ytDlpVersion}",
             $"yt-dlp path: {_ytDlpPath}",
             $"Fusion assembly: {typeof(NetworkPlayer).Assembly.GetName().Version}",
@@ -2477,7 +2575,7 @@ public sealed class Core : MelonMod
     private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.0.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.1.0");
         return client;
     }
 
@@ -2503,7 +2601,7 @@ public sealed class Core : MelonMod
             AutomaticDecompression = DecompressionMethods.All,
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.0.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.1.0");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.1.0
+
+- Added a one-click BoneMenu button that spawns the installed Elijoe Media Player in front of the player's headset.
+- Added a Media Player spawner page with the standard player, flatscreen TV, CRT TV, phone, computer monitor, and boom box variants.
+- Added a shortcut that copies the last generated direct MP4 URL and spawns the standard player, ready for the player to grab and press B.
+- Added an in-game setup check with a clear warning when the Elijoe Media Player content pallet is missing or disabled.
+
 ## 5.0.0
 
 - Replaced the dice/random/tally/notification-test filler with practical troubleshooting and maintenance tools.
