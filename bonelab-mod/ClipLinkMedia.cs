@@ -14,10 +14,10 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "4.0.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.0.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("4.0.0.0")]
-[assembly: AssemblyFileVersion("4.0.0.0")]
+[assembly: AssemblyVersion("5.0.0.0")]
+[assembly: AssemblyFileVersion("5.0.0.0")]
 
 namespace ClipLinkMedia;
 
@@ -27,6 +27,8 @@ public sealed class Core : MelonMod
     private const string YouTubeHome = "https://www.youtube.com/";
     private const string YtDlpDownloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
     private const string LitterboxUploadUrl = "https://litterbox.catbox.moe/resources/internals/api.php";
+    private const string LatestReleaseApiUrl = "https://api.github.com/repos/seeleyllp-crypto/cliplink/releases/latest";
+    private const string ReleasesPageUrl = "https://github.com/seeleyllp-crypto/cliplink/releases";
     private const string DefaultLitterboxRetention = "72h";
     private const int MaximumHistoryEntries = 8;
     private const int MaximumRecentVideos = 12;
@@ -39,15 +41,17 @@ public sealed class Core : MelonMod
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
     private static readonly HttpClient UploadHttpClient = CreateUploadHttpClient();
     private static readonly HttpClient YouTubeHttpClient = CreateYouTubeHttpClient();
+    private static readonly HttpClient DiagnosticsHttpClient = CreateDiagnosticsHttpClient();
     private static readonly object JobGate = new();
     private static readonly Stopwatch UtilityStopwatch = new();
-    private static readonly System.Random UtilityRandom = new();
     private static readonly Dictionary<NetworkPlayer, OwnerTagElement> OwnerTags = new();
     private static readonly List<LinkHistoryEntry> LinkHistory = new();
     private static string _dataDirectory = string.Empty;
     private static string _downloadsDirectory = string.Empty;
     private static string _settingsPath = string.Empty;
     private static string _historyPath = string.Empty;
+    private static string _backupsDirectory = string.Empty;
+    private static string _screenshotsDirectory = string.Empty;
     private static string _ytDlpPath = string.Empty;
     private static string _lastPublicUrl = string.Empty;
     private static string _searchQuery = "bonelab";
@@ -63,6 +67,7 @@ public sealed class Core : MelonMod
     private static string _jobStatus = "Idle";
     private static string _lastPreviewSummary = string.Empty;
     private static string _draftNote = string.Empty;
+    private static string _latestReleaseUrl = ReleasesPageUrl;
     private static DateTimeOffset? _jobStartedUtc;
     private static DateTimeOffset? _countdownEndsUtc;
     private static string _countdownLabel = string.Empty;
@@ -71,10 +76,14 @@ public sealed class Core : MelonMod
     private static int _fpsWindowFrames;
     private static bool _queueModeActive;
     private static bool _queueUploadPublicly;
+    private static bool _cleanupConfirmed;
     private static bool _rightsConfirmed;
+    private static float _lowFpsSeconds;
+    private static bool _lowFpsAlertShown;
     private static int _jobRunning;
     private static int _searchRunning;
     private static int _previewRunning;
+    private static int _diagnosticRunning;
 
     public override void OnInitializeMelon()
     {
@@ -82,15 +91,19 @@ public sealed class Core : MelonMod
         _downloadsDirectory = Path.Combine(_dataDirectory, "Downloads");
         _settingsPath = Path.Combine(_dataDirectory, "settings.json");
         _historyPath = Path.Combine(_dataDirectory, "history.json");
+        _backupsDirectory = Path.Combine(_dataDirectory, "Backups");
+        _screenshotsDirectory = Path.Combine(_dataDirectory, "Screenshots");
         Directory.CreateDirectory(_dataDirectory);
         Directory.CreateDirectory(_downloadsDirectory);
+        Directory.CreateDirectory(_backupsDirectory);
+        Directory.CreateDirectory(_screenshotsDirectory);
         _ytDlpPath = ResolveYtDlpPath();
         LoadPersistentState();
         _draftNote = _settings.PersonalNote;
 
         BuildBoneMenu();
         InitializeFusionOwnerTag();
-        MelonLogger.Msg($"All-in-one v4 ready with media tools and the BONELAB utility toolbox. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
+        MelonLogger.Msg($"All-in-one v5 ready with media tools and practical BONELAB diagnostics/support utilities. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
         MelonLogger.Msg("Fusion OWNER tag enabled. Players with ClipLink Media installed will see OWNER above the creator's head.");
         MelonLogger.Warning("Litterbox uploads are public and temporary. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
@@ -106,6 +119,22 @@ public sealed class Core : MelonMod
             _measuredFps = _fpsWindowFrames / _fpsWindowSeconds;
             _fpsWindowFrames = 0;
             _fpsWindowSeconds = 0f;
+        }
+
+        if (_settings.LowFpsAlertsEnabled && _measuredFps > 0f && _measuredFps < _settings.LowFpsThreshold)
+        {
+            _lowFpsSeconds += Time.unscaledDeltaTime;
+            if (_lowFpsSeconds >= 10f && !_lowFpsAlertShown)
+            {
+                _lowFpsAlertShown = true;
+                Notify("Low FPS warning", $"FPS stayed below {_settings.LowFpsThreshold} for 10 seconds (now {_measuredFps:0.0}).", NotificationType.Warning, 7f);
+            }
+        }
+        else
+        {
+            _lowFpsSeconds = 0f;
+            if (_measuredFps >= _settings.LowFpsThreshold + 5f)
+                _lowFpsAlertShown = false;
         }
 
         if (_countdownEndsUtc.HasValue && DateTimeOffset.UtcNow >= _countdownEndsUtc.Value)
@@ -259,27 +288,19 @@ public sealed class Core : MelonMod
         timers.CreateFunction("Show countdown", Color.white, ShowCountdown);
         timers.CreateFunction("Cancel countdown", Color.red, CancelCountdown);
 
-        Page notes = utilities.CreatePage("Notes and tally counter", Color.green);
+        Page notes = utilities.CreatePage("Saved support notes", Color.green);
         StringElement noteElement = notes.CreateString("Personal note", Color.white, _draftNote, value => _draftNote = value);
-        noteElement.SetTooltip("Use the keyboard, type a note, press Enter, then choose Save note.");
+        noteElement.SetTooltip("Save reproduction steps or troubleshooting notes across launches.");
         notes.CreateFunction("Save note", Color.green, SavePersonalNote);
         notes.CreateFunction("Copy saved note", Color.cyan, CopyPersonalNote);
         notes.CreateFunction("Clear saved note", Color.red, ClearPersonalNote);
-        notes.CreateFunction("Show tally", Color.white, ShowTally);
-        notes.CreateFunction("Tally +1", Color.green, () => ChangeTally(1));
-        notes.CreateFunction("Tally -1", Color.yellow, () => ChangeTally(-1));
-        notes.CreateFunction("Reset tally", Color.red, ResetTally);
-
-        Page random = utilities.CreatePage("Dice and random tools", Color.magenta);
-        random.CreateFunction("Flip a coin", Color.yellow, FlipCoin);
-        random.CreateFunction("Roll D6", Color.cyan, () => RollDice(6));
-        random.CreateFunction("Roll D10", Color.cyan, () => RollDice(10));
-        random.CreateFunction("Roll D20", Color.cyan, () => RollDice(20));
-        random.CreateFunction("Random 1 to 100", Color.green, RandomOneToHundred);
-        random.CreateFunction("Pick yes or no", Color.white, PickYesOrNo);
 
         Page localSettings = utilities.CreatePage("Local audio and FPS", Color.blue);
         localSettings.CreateFunction("Show audio and FPS", Color.white, ShowLocalSettings);
+        localSettings.CreateBool("Low-FPS warnings", Color.yellow, _settings.LowFpsAlertsEnabled, SetLowFpsAlerts);
+        localSettings.CreateFunction("Warn below 45 FPS", Color.yellow, () => SetLowFpsThreshold(45));
+        localSettings.CreateFunction("Warn below 60 FPS", Color.yellow, () => SetLowFpsThreshold(60));
+        localSettings.CreateFunction("Warn below 72 FPS", Color.yellow, () => SetLowFpsThreshold(72));
         localSettings.CreateFunction("Mute local audio", Color.red, () => SetAudioVolume(0f));
         localSettings.CreateFunction("Audio 25%", Color.yellow, () => SetAudioVolume(0.25f));
         localSettings.CreateFunction("Audio 50%", Color.yellow, () => SetAudioVolume(0.5f));
@@ -299,11 +320,34 @@ public sealed class Core : MelonMod
         clipboard.CreateFunction("Copy headset position", Color.cyan, CopyHeadsetPosition);
         clipboard.CreateFunction("Copy session report", Color.green, CopySessionReport);
 
-        Page notificationTests = utilities.CreatePage("Notification tester", Color.yellow);
-        notificationTests.CreateFunction("Information notification", Color.cyan, () => Notify("Information test", "ClipLink Media notifications are working.", NotificationType.Information, 4f));
-        notificationTests.CreateFunction("Success notification", Color.green, () => Notify("Success test", "The success notification is working.", NotificationType.Success, 4f));
-        notificationTests.CreateFunction("Warning notification", Color.yellow, () => Notify("Warning test", "The warning notification is working.", NotificationType.Warning, 4f));
-        notificationTests.CreateFunction("Error notification", Color.red, () => Notify("Error test", "The error notification is working.", NotificationType.Error, 4f));
+        Page health = utilities.CreatePage("Mod health and support", Color.green);
+        health.CreateFunction("Run mod health check", Color.green, RunModHealthCheck);
+        health.CreateFunction("Copy installed mod list", Color.cyan, CopyInstalledModList);
+        health.CreateFunction("Copy recent log errors", Color.yellow, CopyRecentLogErrors);
+        health.CreateFunction("Copy complete support report", Color.magenta, CopyCompleteSupportReport);
+        health.CreateFunction("Open Mods folder", Color.white, OpenModsFolder);
+        health.CreateFunction("Open MelonLoader folder", Color.white, OpenMelonLoaderFolder);
+        health.CreateFunction("Open UserData folder", Color.white, OpenUserDataFolder);
+        health.CreateFunction("Open BONELAB folder", Color.white, OpenGameFolder);
+
+        Page connectivity = utilities.CreatePage("Connectivity and updates", Color.cyan);
+        connectivity.CreateFunction("Test YouTube/Litterbox/GitHub", Color.green, StartConnectivityTest);
+        connectivity.CreateFunction("Check ClipLink update", Color.cyan, CheckForClipLinkUpdate);
+        connectivity.CreateFunction("Open latest release", Color.white, OpenLatestRelease);
+
+        Page fusion = utilities.CreatePage("Fusion session diagnostics", Color.magenta);
+        fusion.CreateFunction("Show Fusion player count", Color.white, ShowFusionPlayerCount);
+        fusion.CreateFunction("Copy Fusion player list", Color.cyan, CopyFusionPlayerList);
+        fusion.CreateFunction("Copy Fusion session report", Color.green, CopyFusionSessionReport);
+
+        Page maintenance = utilities.CreatePage("Maintenance and backups", Color.yellow);
+        maintenance.CreateFunction("Show disk space", Color.white, ShowDiskSpace);
+        maintenance.CreateFunction("Take BONELAB screenshot", Color.cyan, TakeScreenshot);
+        maintenance.CreateFunction("Open screenshots folder", Color.white, OpenScreenshotsFolder);
+        maintenance.CreateFunction("Backup ClipLink data", Color.green, BackupClipLinkData);
+        maintenance.CreateFunction("Open backups folder", Color.white, OpenBackupsFolder);
+        maintenance.CreateBool("Confirm old-temp cleanup", Color.red, false, value => _cleanupConfirmed = value);
+        maintenance.CreateFunction("Clean old ClipLink temp jobs", Color.red, CleanOldClipLinkTemps);
     }
 
     private static void ShowClock()
@@ -369,7 +413,7 @@ public sealed class Core : MelonMod
             $"VSync: {(QualitySettings.vSyncCount > 0 ? "On" : "Off")}",
             $"Local audio: {AudioListener.volume * 100f:0}%",
             $"Unity: {Application.unityVersion}",
-            $"ClipLink Media: 4.0.0",
+            $"ClipLink Media: 5.0.0",
         });
         GUIUtility.systemCopyBuffer = report;
         MelonLogger.Msg(report);
@@ -469,45 +513,6 @@ public sealed class Core : MelonMod
         Notify("Personal note", "Saved note cleared.", NotificationType.Success, 3f);
     }
 
-    private static void ShowTally()
-    {
-        Notify("Tally counter", _settings.TallyCount.ToString(), NotificationType.Information, 4f);
-    }
-
-    private static void ChangeTally(int change)
-    {
-        _settings.TallyCount += change;
-        SaveSettings();
-        Notify("Tally counter", _settings.TallyCount.ToString(), NotificationType.Success, 3f);
-    }
-
-    private static void ResetTally()
-    {
-        _settings.TallyCount = 0;
-        SaveSettings();
-        Notify("Tally counter", "Reset to 0.", NotificationType.Success, 3f);
-    }
-
-    private static void FlipCoin()
-    {
-        Notify("Coin flip", UtilityRandom.Next(2) == 0 ? "Heads" : "Tails", NotificationType.Information, 4f);
-    }
-
-    private static void RollDice(int sides)
-    {
-        Notify($"D{sides} roll", UtilityRandom.Next(1, sides + 1).ToString(), NotificationType.Information, 4f);
-    }
-
-    private static void RandomOneToHundred()
-    {
-        Notify("Random 1-100", UtilityRandom.Next(1, 101).ToString(), NotificationType.Information, 4f);
-    }
-
-    private static void PickYesOrNo()
-    {
-        Notify("Yes or no", UtilityRandom.Next(2) == 0 ? "Yes" : "No", NotificationType.Information, 4f);
-    }
-
     private static void ShowLocalSettings()
     {
         string target = Application.targetFrameRate < 0 ? "unlimited" : Application.targetFrameRate.ToString();
@@ -532,6 +537,24 @@ public sealed class Core : MelonMod
         Notify("Local VSync", enabled ? "VSync enabled." : "VSync disabled.", NotificationType.Success, 3f);
     }
 
+    private static void SetLowFpsAlerts(bool enabled)
+    {
+        _settings.LowFpsAlertsEnabled = enabled;
+        _lowFpsSeconds = 0f;
+        _lowFpsAlertShown = false;
+        SaveSettings();
+        Notify("Low-FPS warnings", enabled ? $"Enabled below {_settings.LowFpsThreshold} FPS." : "Disabled.", NotificationType.Success, 4f);
+    }
+
+    private static void SetLowFpsThreshold(int threshold)
+    {
+        _settings.LowFpsThreshold = threshold;
+        _lowFpsSeconds = 0f;
+        _lowFpsAlertShown = false;
+        SaveSettings();
+        Notify("Low-FPS threshold", $"Warnings will trigger below {threshold} FPS for 10 seconds.", NotificationType.Success, 4f);
+    }
+
     private static void CopyLocalTimestamp()
     {
         GUIUtility.systemCopyBuffer = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss zzz");
@@ -548,6 +571,475 @@ public sealed class Core : MelonMod
     {
         GUIUtility.systemCopyBuffer = SceneManager.GetActiveScene().name;
         Notify("Clipboard helper", "Current scene name copied.", NotificationType.Success, 3f);
+    }
+
+    private static string GetMelonBaseDirectory()
+    {
+        return Directory.GetParent(MelonEnvironment.UserDataDirectory)?.FullName ?? MelonEnvironment.UserDataDirectory;
+    }
+
+    private static string GetModsDirectory()
+    {
+        return Path.Combine(GetMelonBaseDirectory(), "Mods");
+    }
+
+    private static string GetMelonLoaderDirectory()
+    {
+        return Path.Combine(GetMelonBaseDirectory(), "MelonLoader");
+    }
+
+    private static string GetLatestLogPath()
+    {
+        string profileLog = Path.Combine(GetMelonLoaderDirectory(), "Latest.log");
+        if (File.Exists(profileLog)) return profileLog;
+        string gameLog = Path.Combine(GetGameDirectory(), "MelonLoader", "Latest.log");
+        return File.Exists(gameLog) ? gameLog : profileLog;
+    }
+
+    private static string GetGameDirectory()
+    {
+        string current = Environment.CurrentDirectory;
+        if (File.Exists(Path.Combine(current, "BONELAB_Steam_Windows64.exe"))) return current;
+        string applicationBase = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return File.Exists(Path.Combine(applicationBase, "BONELAB_Steam_Windows64.exe")) ? applicationBase : current;
+    }
+
+    private static void OpenModsFolder() => OpenFolder(GetModsDirectory(), "Mods folder");
+    private static void OpenMelonLoaderFolder() => OpenFolder(GetMelonLoaderDirectory(), "MelonLoader folder");
+    private static void OpenUserDataFolder() => OpenFolder(MelonEnvironment.UserDataDirectory, "UserData folder");
+    private static void OpenGameFolder() => OpenFolder(GetGameDirectory(), "BONELAB folder");
+    private static void OpenScreenshotsFolder() => OpenFolder(_screenshotsDirectory, "screenshots folder");
+    private static void OpenBackupsFolder() => OpenFolder(_backupsDirectory, "backups folder");
+
+    private static string DllVersion(string path)
+    {
+        if (!File.Exists(path)) return "missing";
+        string? version = FileVersionInfo.GetVersionInfo(path).FileVersion;
+        return string.IsNullOrWhiteSpace(version) ? "unknown" : version;
+    }
+
+    private static string BuildModHealthReport(out int issueCount)
+    {
+        var issues = new List<string>();
+        var details = new List<string>();
+        string modsDirectory = GetModsDirectory();
+        string melonLoaderDirectory = GetMelonLoaderDirectory();
+        string latestLog = GetLatestLogPath();
+        _ytDlpPath = ResolveYtDlpPath();
+
+        if (!Directory.Exists(modsDirectory)) issues.Add("Mods folder is missing");
+        if (!Directory.Exists(melonLoaderDirectory)) issues.Add("MelonLoader folder is missing");
+        if (!File.Exists(latestLog)) issues.Add("Latest.log is missing");
+        if (!File.Exists(_ytDlpPath)) issues.Add("yt-dlp.exe is missing");
+
+        string boneLibPath = Path.Combine(modsDirectory, "BoneLib.dll");
+        string fusionPath = Path.Combine(modsDirectory, "LabFusion.dll");
+        string clipLinkPath = Path.Combine(modsDirectory, "ClipLinkMedia.dll");
+        if (!File.Exists(boneLibPath)) issues.Add("BoneLib.dll is missing");
+        if (!File.Exists(fusionPath)) issues.Add("LabFusion.dll is missing");
+        if (!File.Exists(clipLinkPath)) issues.Add("ClipLinkMedia.dll is missing from the active Mods folder");
+
+        int modCount = 0;
+        try
+        {
+            FileInfo[] dlls = new DirectoryInfo(modsDirectory).GetFiles("*.dll", SearchOption.AllDirectories);
+            modCount = dlls.Length;
+            foreach (FileInfo empty in dlls.Where(file => file.Length == 0))
+                issues.Add($"Zero-byte mod DLL: {empty.Name}");
+            foreach (IGrouping<string, FileInfo> duplicate in dlls.GroupBy(file => file.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+                issues.Add($"Duplicate DLL name: {duplicate.Key} ({duplicate.Count()} copies)");
+        }
+        catch (Exception ex)
+        {
+            issues.Add($"Could not scan mod DLLs: {ex.Message}");
+        }
+
+        try
+        {
+            string root = Path.GetPathRoot(GetMelonBaseDirectory()) ?? string.Empty;
+            if (!string.IsNullOrEmpty(root))
+            {
+                long free = new DriveInfo(root).AvailableFreeSpace;
+                details.Add($"Free disk space: {FormatBytes(free)}");
+                if (free < 2L * 1024 * 1024 * 1024) issues.Add("Less than 2 GB free disk space");
+            }
+        }
+        catch (Exception ex)
+        {
+            details.Add($"Disk check failed: {ex.Message}");
+        }
+
+        details.Add($"Active Mods folder: {modsDirectory}");
+        details.Add($"Installed DLL count: {modCount}");
+        details.Add($"ClipLink Media: {DllVersion(clipLinkPath)}");
+        details.Add($"BoneLib: {DllVersion(boneLibPath)}");
+        details.Add($"Fusion: {DllVersion(fusionPath)}");
+        details.Add($"yt-dlp: {GetYtDlpVersion()}");
+        details.Add($"Latest log: {latestLog}");
+
+        issueCount = issues.Count;
+        var lines = new List<string>
+        {
+            "ClipLink Media mod health report",
+            $"Status: {(issueCount == 0 ? "READY" : $"{issueCount} ISSUE(S)")}",
+            $"Checked: {DateTime.Now:F}",
+        };
+        lines.AddRange(details);
+        if (issues.Count > 0)
+        {
+            lines.Add("Issues:");
+            lines.AddRange(issues.Select(issue => $"- {issue}"));
+        }
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void RunModHealthCheck()
+    {
+        string report = BuildModHealthReport(out int issues);
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("Mod health check", issues == 0 ? "Ready. Full report copied." : $"Found {issues} issue(s). Full report copied.", issues == 0 ? NotificationType.Success : NotificationType.Warning, 7f);
+    }
+
+    private static string BuildInstalledModList(int maximumEntries = 200)
+    {
+        string modsDirectory = GetModsDirectory();
+        if (!Directory.Exists(modsDirectory)) return $"Mods folder missing: {modsDirectory}";
+        try
+        {
+            FileInfo[] dlls = new DirectoryInfo(modsDirectory)
+                .GetFiles("*.dll", SearchOption.AllDirectories)
+                .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(maximumEntries)
+                .ToArray();
+            var lines = new List<string> { $"Installed BONELAB mod DLLs ({dlls.Length} shown)", $"Folder: {modsDirectory}" };
+            foreach (FileInfo file in dlls)
+                lines.Add($"{file.Name} | v{DllVersion(file.FullName)} | {FormatBytes(file.Length)}");
+            return string.Join(Environment.NewLine, lines);
+        }
+        catch (Exception ex)
+        {
+            return $"Could not list installed mods: {ex.Message}";
+        }
+    }
+
+    private static void CopyInstalledModList()
+    {
+        string report = BuildInstalledModList();
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("Installed mod list", "Installed DLL names, versions, and sizes copied.", NotificationType.Success, 5f);
+    }
+
+    private static string GetRecentLogErrors(int maximumEntries = 30)
+    {
+        string path = GetLatestLogPath();
+        if (!File.Exists(path)) return $"Latest log not found: {path}";
+        try
+        {
+            string[] errors = File.ReadLines(path)
+                .TakeLast(2500)
+                .Where(line => line.Contains("[ERROR]", StringComparison.OrdinalIgnoreCase)
+                            || line.Contains("Exception", StringComparison.OrdinalIgnoreCase)
+                            || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                            || line.Contains("missing dependency", StringComparison.OrdinalIgnoreCase))
+                .TakeLast(maximumEntries)
+                .ToArray();
+            if (errors.Length == 0) return $"No recent error-like lines found in {path}";
+            return $"Recent BONELAB error-like log lines ({errors.Length}){Environment.NewLine}Log: {path}{Environment.NewLine}{string.Join(Environment.NewLine, errors)}";
+        }
+        catch (Exception ex)
+        {
+            return $"Could not read recent log errors: {ex.Message}";
+        }
+    }
+
+    private static void CopyRecentLogErrors()
+    {
+        string report = GetRecentLogErrors();
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("Recent log errors", "Recent error-like log lines copied for troubleshooting.", NotificationType.Success, 5f);
+    }
+
+    private static string BuildFusionPlayerList()
+    {
+        NetworkPlayer[] players = NetworkPlayer.Players.ToArray();
+        if (players.Length == 0) return "No Fusion players are currently registered.";
+        var lines = new List<string> { $"Fusion players ({players.Length})" };
+        foreach (NetworkPlayer player in players)
+        {
+            string local = player.PlayerID != null && player.PlayerID.IsMe ? " [LOCAL]" : string.Empty;
+            string owner = player.PlayerID != null && player.PlayerID.PlatformID == OwnerPlatformId ? " [OWNER]" : string.Empty;
+            lines.Add($"- {player.Username}{local}{owner}");
+        }
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void ShowFusionPlayerCount()
+    {
+        int count = NetworkPlayer.Players.Count;
+        Notify("Fusion session", $"{count} registered player(s); {OwnerTags.Count} remote OWNER tag(s) attached locally.", NotificationType.Information, 5f);
+    }
+
+    private static void CopyFusionPlayerList()
+    {
+        string report = BuildFusionPlayerList();
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("Fusion player list", "Current Fusion player names copied.", NotificationType.Success, 4f);
+    }
+
+    private static void CopyFusionSessionReport()
+    {
+        string report = string.Join(Environment.NewLine, new[]
+        {
+            "Fusion session diagnostics",
+            $"Fusion assembly: {typeof(NetworkPlayer).Assembly.GetName().Version}",
+            $"Local OWNER tags attached: {OwnerTags.Count}",
+            BuildFusionPlayerList(),
+        });
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("Fusion diagnostics", "Fusion session report copied.", NotificationType.Success, 4f);
+    }
+
+    private static void CopyCompleteSupportReport()
+    {
+        string health = BuildModHealthReport(out _);
+        string session = string.Join(Environment.NewLine, new[]
+        {
+            $"Scene: {SceneManager.GetActiveScene().name}",
+            $"Measured FPS: {_measuredFps:0.0}",
+            $"Target FPS: {Application.targetFrameRate}",
+            $"VSync: {QualitySettings.vSyncCount}",
+            $"Unity: {Application.unityVersion}",
+            $"OS: {SystemInfo.operatingSystem}",
+            $"CPU: {SystemInfo.processorType}",
+            $"GPU: {SystemInfo.graphicsDeviceName}",
+            $"RAM: {SystemInfo.systemMemorySize} MB",
+        });
+        string report = string.Join(Environment.NewLine + Environment.NewLine, new[]
+        {
+            "CLIPLINK MEDIA COMPLETE SUPPORT REPORT v5.0.0",
+            health,
+            session,
+            BuildFusionPlayerList(),
+            BuildInstalledModList(100),
+            GetRecentLogErrors(40),
+        });
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("Support report", "Health, session, Fusion, mod-list, and log report copied.", NotificationType.Success, 6f);
+    }
+
+    private static void StartConnectivityTest()
+    {
+        if (Interlocked.CompareExchange(ref _diagnosticRunning, 1, 0) != 0)
+        {
+            Warn("A connectivity or update check is already running.");
+            return;
+        }
+        Notify("Connectivity test", "Checking YouTube, Litterbox, and GitHub...", NotificationType.Information, 4f);
+        _ = Task.Run(RunConnectivityTest);
+    }
+
+    private static void RunConnectivityTest()
+    {
+        try
+        {
+            string[] results =
+            {
+                TestEndpoint("YouTube", "https://www.youtube.com/generate_204"),
+                TestEndpoint("Litterbox", "https://litterbox.catbox.moe/"),
+                TestEndpoint("GitHub", "https://api.github.com/"),
+            };
+            string report = $"ClipLink connectivity test - {DateTime.Now:F}{Environment.NewLine}{string.Join(Environment.NewLine, results)}";
+            MainThreadActions.Enqueue(() =>
+            {
+                GUIUtility.systemCopyBuffer = report;
+                MelonLogger.Msg(report);
+                Notify("Connectivity test finished", "YouTube/Litterbox/GitHub results copied.", NotificationType.Success, 6f);
+            });
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Connectivity test failed: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _diagnosticRunning, 0);
+        }
+    }
+
+    private static string TestEndpoint(string name, string url)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using HttpResponseMessage response = DiagnosticsHttpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+            stopwatch.Stop();
+            return $"{name}: HTTP {(int)response.StatusCode} in {stopwatch.ElapsedMilliseconds} ms";
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            return $"{name}: FAILED after {stopwatch.ElapsedMilliseconds} ms ({ex.Message})";
+        }
+    }
+
+    private static void CheckForClipLinkUpdate()
+    {
+        if (Interlocked.CompareExchange(ref _diagnosticRunning, 1, 0) != 0)
+        {
+            Warn("A connectivity or update check is already running.");
+            return;
+        }
+        Notify("ClipLink update check", "Checking the latest GitHub release...", NotificationType.Information, 4f);
+        _ = Task.Run(LoadLatestRelease);
+    }
+
+    private static void LoadLatestRelease()
+    {
+        try
+        {
+            string json = DiagnosticsHttpClient.GetStringAsync(LatestReleaseApiUrl).GetAwaiter().GetResult();
+            using JsonDocument document = JsonDocument.Parse(json);
+            string tag = JsonText(document.RootElement, "tag_name", "unknown");
+            string url = JsonText(document.RootElement, "html_url", ReleasesPageUrl);
+            MainThreadActions.Enqueue(() =>
+            {
+                _latestReleaseUrl = url;
+                bool current = Version.TryParse(tag.TrimStart('v'), out Version? latestVersion)
+                            && Version.TryParse("5.0.0", out Version? currentVersion)
+                            && currentVersion.CompareTo(latestVersion) >= 0;
+                Notify("ClipLink update check", current ? $"You are current ({tag})." : $"Latest release: {tag}. Open latest release to update.", current ? NotificationType.Success : NotificationType.Warning, 7f);
+            });
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Update check failed: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _diagnosticRunning, 0);
+        }
+    }
+
+    private static void OpenLatestRelease()
+    {
+        Application.OpenURL(_latestReleaseUrl);
+        Notify("ClipLink Media", "Opened the latest GitHub release page.", NotificationType.Information, 3f);
+    }
+
+    private static void ShowDiskSpace()
+    {
+        try
+        {
+            string dataRoot = Path.GetPathRoot(_dataDirectory) ?? string.Empty;
+            string jobsRoot = Path.GetPathRoot(ChooseJobsRoot()) ?? string.Empty;
+            string dataFree = string.IsNullOrEmpty(dataRoot) ? "unknown" : FormatBytes(new DriveInfo(dataRoot).AvailableFreeSpace);
+            string jobsFree = string.IsNullOrEmpty(jobsRoot) ? "unknown" : FormatBytes(new DriveInfo(jobsRoot).AvailableFreeSpace);
+            Notify("Disk space", $"ClipLink data drive: {dataFree} free; temporary-job drive: {jobsFree} free.", NotificationType.Information, 6f);
+        }
+        catch (Exception ex)
+        {
+            Warn($"Could not read disk space: {ex.Message}");
+        }
+    }
+
+    private static void TakeScreenshot()
+    {
+        try
+        {
+            Directory.CreateDirectory(_screenshotsDirectory);
+            string path = Path.Combine(_screenshotsDirectory, $"BONELAB-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+            ScreenCapture.CaptureScreenshot(path, 1);
+            MelonLogger.Msg($"Screenshot requested: {path}");
+            Notify("BONELAB screenshot", $"Saving {Path.GetFileName(path)} in ClipLink Screenshots.", NotificationType.Success, 5f);
+        }
+        catch (Exception ex)
+        {
+            Warn($"Could not take screenshot: {ex.Message}");
+        }
+    }
+
+    private static void BackupClipLinkData()
+    {
+        try
+        {
+            string backup = Path.Combine(_backupsDirectory, DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            Directory.CreateDirectory(backup);
+            int copied = 0;
+            foreach (string source in new[] { _settingsPath, _historyPath })
+            {
+                if (!File.Exists(source)) continue;
+                File.Copy(source, Path.Combine(backup, Path.GetFileName(source)), overwrite: false);
+                copied++;
+            }
+            MelonLogger.Msg($"Backed up {copied} ClipLink data file(s) to {backup}");
+            Notify("ClipLink backup", $"Backed up {copied} data file(s).", NotificationType.Success, 5f);
+        }
+        catch (Exception ex)
+        {
+            Warn($"Backup failed: {ex.Message}");
+        }
+    }
+
+    private static void CleanOldClipLinkTemps()
+    {
+        if (!_cleanupConfirmed)
+        {
+            Warn("Turn on 'Confirm old-temp cleanup' before deleting old ClipLink job folders.");
+            return;
+        }
+        _cleanupConfirmed = false;
+        Notify("ClipLink maintenance", "Scanning only ClipLinkMediaJobs folders older than 24 hours...", NotificationType.Information, 4f);
+        _ = Task.Run(CleanOldClipLinkTempsWorker);
+    }
+
+    private static void CleanOldClipLinkTempsWorker()
+    {
+        int deletedDirectories = 0;
+        long deletedBytes = 0;
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            Path.Combine(Path.GetTempPath(), "ClipLinkMediaJobs"),
+        };
+        foreach (DriveInfo drive in DriveInfo.GetDrives().Where(drive => drive.IsReady && drive.DriveType == DriveType.Fixed))
+            roots.Add(Path.Combine(drive.RootDirectory.FullName, "ClipLinkMediaJobs"));
+
+        DateTime cutoff = DateTime.UtcNow.AddHours(-24);
+        foreach (string root in roots)
+        {
+            try
+            {
+                string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!string.Equals(Path.GetFileName(fullRoot), "ClipLinkMediaJobs", StringComparison.OrdinalIgnoreCase) || !Directory.Exists(fullRoot))
+                    continue;
+                var rootInfo = new DirectoryInfo(fullRoot);
+                if ((rootInfo.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                foreach (DirectoryInfo job in rootInfo.GetDirectories())
+                {
+                    if (job.LastWriteTimeUtc >= cutoff || (job.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    if (job.GetDirectories().Length != 0)
+                    {
+                        MelonLogger.Warning($"Skipped unexpected nested ClipLink temp folder: {job.FullName}");
+                        continue;
+                    }
+                    try { deletedBytes += job.GetFiles().Sum(file => file.Length); }
+                    catch { }
+                    job.Delete(recursive: true);
+                    deletedDirectories++;
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"Could not clean a ClipLink temp root: {ex.Message}");
+            }
+        }
+
+        MainThreadActions.Enqueue(() => Notify("ClipLink cleanup finished", $"Deleted {deletedDirectories} old job folder(s), freeing {FormatBytes(deletedBytes)}.", NotificationType.Success, 6f));
     }
 
     private static void LoadPersistentState()
@@ -569,6 +1061,8 @@ public sealed class Core : MelonMod
             _settings.VideoQuality = "Best";
         _settings.LastSourceUrl ??= string.Empty;
         _settings.PersonalNote ??= string.Empty;
+        if (_settings.LowFpsThreshold is not (45 or 60 or 72))
+            _settings.LowFpsThreshold = 45;
         _settings.RecentSearches ??= new List<string>();
         _settings.RecentVideos ??= new List<RecentVideoEntry>();
         _settings.Favorites ??= new List<RecentVideoEntry>();
@@ -1534,7 +2028,7 @@ public sealed class Core : MelonMod
         string report = string.Join(Environment.NewLine, new[]
         {
             "ClipLink Media setup report",
-            "Version: 4.0.0",
+            "Version: 5.0.0",
             $"yt-dlp: {ytDlpVersion}",
             $"yt-dlp path: {_ytDlpPath}",
             $"Fusion assembly: {typeof(NetworkPlayer).Assembly.GetName().Version}",
@@ -1546,8 +2040,8 @@ public sealed class Core : MelonMod
             $"Queued videos: {_settings.JobQueue.Count}",
             $"Queue active: {_queueModeActive}",
             $"Job status: {_jobStatus}",
-            $"Utility tally: {_settings.TallyCount}",
             $"Personal note saved: {!string.IsNullOrWhiteSpace(_settings.PersonalNote)}",
+            $"Low-FPS warnings: {_settings.LowFpsAlertsEnabled} below {_settings.LowFpsThreshold}",
             $"Measured FPS: {_measuredFps:0.0}",
             $"Scene: {SceneManager.GetActiveScene().name}",
             $"Saved public URLs: {LinkHistory.Count}",
@@ -1983,7 +2477,7 @@ public sealed class Core : MelonMod
     private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/4.0.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.0.0");
         return client;
     }
 
@@ -1998,6 +2492,19 @@ public sealed class Core : MelonMod
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127 Safari/537.36");
         client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
+        return client;
+    }
+
+    private static HttpClient CreateDiagnosticsHttpClient()
+    {
+        var handler = new HttpClientHandler
+        {
+            AllowAutoRedirect = true,
+            AutomaticDecompression = DecompressionMethods.All,
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.0.0");
+        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }
 
@@ -2025,7 +2532,8 @@ public sealed class ClipLinkSettings
     public List<RecentVideoEntry> Favorites { get; set; } = new();
     public List<RecentVideoEntry> JobQueue { get; set; } = new();
     public string PersonalNote { get; set; } = string.Empty;
-    public int TallyCount { get; set; }
+    public bool LowFpsAlertsEnabled { get; set; }
+    public int LowFpsThreshold { get; set; } = 45;
     public int TotalPublicLinks { get; set; }
     public int TotalLocalDownloads { get; set; }
     public long TotalBytesProcessed { get; set; }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 5.0.0
+
+- Replaced the dice/random/tally/notification-test filler with practical troubleshooting and maintenance tools.
+- Added dependency/mod health checks, duplicate and zero-byte DLL detection, installed-mod export, recent log-error extraction, and a complete support report.
+- Added Fusion player-count, player-list, and session-report diagnostics without exposing platform IDs.
+- Added YouTube/Litterbox/GitHub connectivity tests and a GitHub release update checker.
+- Added screenshot capture, ClipLink settings/history backups, disk-space checks, and shortcuts to the active Mods, MelonLoader, UserData, BONELAB, screenshot, and backup folders.
+- Added optional sustained-low-FPS warnings with 45, 60, and 72 FPS thresholds.
+- Added confirmed cleanup restricted to non-reparse-point ClipLinkMediaJobs subfolders older than 24 hours.
+- Kept the useful session dashboard, stopwatch/countdowns, support notes, local audio/FPS controls, clipboard helpers, complete media workflow, and Fusion OWNER label.
+
 ## 4.0.0
 
 - Added a separate general BONELAB utility toolbox unrelated to the media workflow.
