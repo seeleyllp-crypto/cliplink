@@ -23,18 +23,20 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.4.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.5.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("5.4.0.0")]
-[assembly: AssemblyFileVersion("5.4.0.0")]
+[assembly: AssemblyVersion("5.5.0.0")]
+[assembly: AssemblyFileVersion("5.5.0.0")]
 
 namespace ClipLinkMedia;
 
 public sealed class Core : MelonMod
 {
-    private const string ModVersion = "5.4.0";
+    private const string ModVersion = "5.5.0";
     private const ulong OwnerPlatformId = 76561199548494681UL;
     private const string YouTubeHome = "https://www.youtube.com/";
+    private const string RealYouTubeBrowserFileName = "ClipLinkYouTubeBrowser.exe";
+    private const string RealYouTubeBrowserDownloadUrl = "https://github.com/seeleyllp-crypto/cliplink/releases/latest/download/ClipLinkYouTubeBrowser.exe";
     private const string YtDlpDownloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
     private const string LitterboxUploadUrl = "https://litterbox.catbox.moe/resources/internals/api.php";
     private const string LatestReleaseApiUrl = "https://api.github.com/repos/seeleyllp-crypto/cliplink/releases/latest";
@@ -59,6 +61,7 @@ public sealed class Core : MelonMod
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
     private static readonly HttpClient YouTubeHttpClient = CreateYouTubeHttpClient();
     private static readonly HttpClient DiagnosticsHttpClient = CreateDiagnosticsHttpClient();
+    private static readonly HttpClient BrowserDownloadHttpClient = CreateBrowserDownloadHttpClient();
     private static readonly object JobGate = new();
     private static readonly Stopwatch UtilityStopwatch = new();
     private static readonly Dictionary<NetworkPlayer, OwnerTagElement> OwnerTags = new();
@@ -77,6 +80,8 @@ public sealed class Core : MelonMod
     private static string _backupsDirectory = string.Empty;
     private static string _screenshotsDirectory = string.Empty;
     private static string _ytDlpPath = string.Empty;
+    private static string _realYouTubeBrowserPath = string.Empty;
+    private static string _realYouTubeSelectionPath = string.Empty;
     private static string _lastPublicUrl = string.Empty;
     private static string _searchQuery = "bonelab";
     private static Page? _searchResultsPage;
@@ -110,6 +115,9 @@ public sealed class Core : MelonMod
     private static int _searchRunning;
     private static int _previewRunning;
     private static int _diagnosticRunning;
+    private static int _browserInstallRunning;
+    private static float _realBrowserPollSeconds;
+    private static DateTime _lastRealBrowserSelectionWriteUtc;
 
     public override void OnInitializeMelon()
     {
@@ -119,22 +127,32 @@ public sealed class Core : MelonMod
         _historyPath = Path.Combine(_dataDirectory, "history.json");
         _backupsDirectory = Path.Combine(_dataDirectory, "Backups");
         _screenshotsDirectory = Path.Combine(_dataDirectory, "Screenshots");
+        _realYouTubeSelectionPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClipLinkMedia",
+            "selected-youtube-url.txt");
         Directory.CreateDirectory(_dataDirectory);
         Directory.CreateDirectory(_downloadsDirectory);
         Directory.CreateDirectory(_backupsDirectory);
         Directory.CreateDirectory(_screenshotsDirectory);
         _ytDlpPath = ResolveYtDlpPath();
+        _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
+        _realYouTubeSelectionPath = ResolveRealYouTubeSelectionPath();
+        if (File.Exists(_realYouTubeSelectionPath))
+            _lastRealBrowserSelectionWriteUtc = File.GetLastWriteTimeUtc(_realYouTubeSelectionPath);
         LoadPersistentState();
         _draftNote = _settings.PersonalNote;
 
         BuildBoneMenu();
         InitializeFusionOwnerTag();
         InitializeFusionPresence();
-        MelonLogger.Msg($"All-in-one v{ModVersion} ready with Fusion mod-presence detection, synced media-player spawning, and resilient video uploads. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
+        MelonLogger.Msg($"All-in-one v{ModVersion} ready with the real signed-out YouTube GUI, Fusion mod-presence detection, synced media-player spawning, and resilient video uploads. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
         MelonLogger.Msg("Fusion OWNER tag enabled. Players with ClipLink Media installed will see OWNER above the creator's head.");
         MelonLogger.Warning("Litterbox uploads are public and temporary. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
             MelonLogger.Error("yt-dlp.exe is not installed. Use the BoneMenu GitHub download and folder buttons.");
+        if (!File.Exists(_realYouTubeBrowserPath))
+            MelonLogger.Warning("The real YouTube browser companion is not installed yet. Opening it from BoneMenu will download it from GitHub.");
     }
 
     public override void OnUpdate()
@@ -177,6 +195,13 @@ public sealed class Core : MelonMod
         {
             try { action(); }
             catch (Exception ex) { MelonLogger.Error($"Main-thread action failed: {ex}"); }
+        }
+
+        _realBrowserPollSeconds += Time.unscaledDeltaTime;
+        if (_realBrowserPollSeconds >= 0.75f)
+        {
+            _realBrowserPollSeconds = 0f;
+            PollRealYouTubeSelection();
         }
     }
 
@@ -396,14 +421,23 @@ public sealed class Core : MelonMod
     private static void BuildBoneMenu()
     {
         Page page = Page.Root.CreatePage("ClipLink Media", Color.cyan);
-        Page browserPage = page.CreatePage("YouTube - no login", new Color(1f, 0f, 0f));
+        Page realBrowserPage = page.CreatePage("REAL YouTube website", new Color(1f, 0f, 0f));
+        realBrowserPage.CreateFunction("Open REAL YouTube GUI", Color.red, OpenRealYouTubeBrowser);
+        realBrowserPage.CreateFunction("Copy last clicked video", Color.white, CopyLastRealYouTubeSelection);
+        realBrowserPage.CreateFunction("Use clicked video + spawn player", Color.cyan, SpawnMediaPlayerWithRealYouTubeSelection);
+        realBrowserPage.CreateFunction("Check browser install", Color.green, CheckRealYouTubeBrowser);
+        realBrowserPage.CreateFunction("Install / update browser", Color.yellow, InstallRealYouTubeBrowser);
+        realBrowserPage.CreateFunction("Open browser install folder", Color.yellow, OpenRealYouTubeBrowserFolder);
+        realBrowserPage.CreateFunction("Open regular browser fallback", Color.gray, OpenYouTube);
+
+        Page browserPage = page.CreatePage("Thumbnail browser fallback", Color.gray);
         ApplyYouTubeTheme(browserPage);
         FunctionElement youtubeHeader = browserPage.CreateFunction(
-            "YouTube | Signed out",
+            "Native VR fallback",
             Color.white,
-            () => Notify("YouTube", "Signed-out visual browser. Search or choose Explore; selecting a thumbnail copies its normal YouTube URL.", NotificationType.Information, 7f));
+            () => Notify("YouTube", "This is the native VR fallback. Use REAL YouTube website for YouTube's actual GUI.", NotificationType.Information, 7f));
         youtubeHeader.Logo = _youtubeLogo;
-        youtubeHeader.SetTooltip("YouTube-style browser | No login, cookies, API key, or account required.");
+        youtubeHeader.SetTooltip("Fallback thumbnail search. The REAL YouTube website page launches YouTube's actual GUI.");
         StringElement searchElement = browserPage.CreateString("Search", Color.white, _searchQuery, value => _searchQuery = value.Trim());
         searchElement.SetTooltip("Select the keyboard button, type a search, and press Enter.");
         browserPage.CreateFunction("Search YouTube", Color.red, SearchYouTube);
@@ -430,7 +464,7 @@ public sealed class Core : MelonMod
         browserPage.CreateFunction("Add copied video to favorites", Color.magenta, AddCopiedFavorite);
         browserPage.CreateFunction("Preview copied video", Color.green, PreviewCopiedVideo);
         browserPage.CreateFunction("Copy last preview info", Color.white, CopyLastPreview);
-        browserPage.CreateFunction("Open full YouTube on desktop", Color.red, OpenYouTube);
+        browserPage.CreateFunction("Open REAL YouTube GUI", Color.red, OpenRealYouTubeBrowser);
 
         page.CreateBool("I own / have permission", Color.yellow, false, value => _rightsConfirmed = value);
         page.CreateFunction("Make public MP4 URL", Color.green, StartClipboardJob);
@@ -485,7 +519,8 @@ public sealed class Core : MelonMod
 
         Page toolsPage = page.CreatePage("Setup and folders", Color.gray);
         toolsPage.CreateFunction("Check setup", Color.green, CheckSetup);
-        toolsPage.CreateFunction("Open YouTube on desktop", Color.red, OpenYouTube);
+        toolsPage.CreateFunction("Open REAL YouTube GUI", Color.red, OpenRealYouTubeBrowser);
+        toolsPage.CreateFunction("Install REAL YouTube GUI", Color.yellow, InstallRealYouTubeBrowser);
         toolsPage.CreateFunction("Get yt-dlp from GitHub", Color.yellow, OpenYtDlpDownload);
         toolsPage.CreateFunction("Open ClipLink folder", Color.yellow, OpenYtDlpFolder);
         toolsPage.CreateFunction("Open downloads folder", Color.cyan, OpenDownloadsFolder);
@@ -2226,6 +2261,193 @@ public sealed class Core : MelonMod
         }
     }
 
+    private static void OpenRealYouTubeBrowser()
+    {
+        _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
+        if (!File.Exists(_realYouTubeBrowserPath))
+        {
+            InstallRealYouTubeBrowser();
+            return;
+        }
+
+        LaunchRealYouTubeBrowser();
+    }
+
+    private static void LaunchRealYouTubeBrowser()
+    {
+        try
+        {
+            string workingDirectory = Path.GetDirectoryName(_realYouTubeBrowserPath) ?? _dataDirectory;
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = _realYouTubeBrowserPath,
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = true,
+            });
+            MelonLogger.Msg($"Opened the real signed-out YouTube GUI: {_realYouTubeBrowserPath}");
+            Notify("Real YouTube opened", "Use the SteamVR desktop panel to view it. Clicking a video copies its URL automatically.", NotificationType.Success, 7f);
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Could not open the real YouTube GUI: {ex.Message}");
+        }
+    }
+
+    private static void InstallRealYouTubeBrowser()
+    {
+        if (Interlocked.CompareExchange(ref _browserInstallRunning, 1, 0) != 0)
+        {
+            Warn("The real YouTube browser is already downloading.");
+            return;
+        }
+
+        Notify("Installing real YouTube GUI", "Downloading the signed-out browser from this mod's GitHub release...", NotificationType.Information, 6f);
+        _ = Task.Run(DownloadRealYouTubeBrowser);
+    }
+
+    private static async Task DownloadRealYouTubeBrowser()
+    {
+        string targetPath = Path.Combine(_dataDirectory, RealYouTubeBrowserFileName);
+        string partialPath = targetPath + ".download";
+        try
+        {
+            Directory.CreateDirectory(_dataDirectory);
+            using HttpResponseMessage response = await BrowserDownloadHttpClient
+                .GetAsync(RealYouTubeBrowserDownloadUrl, HttpCompletionOption.ResponseHeadersRead)
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            await using Stream source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            await using (var destination = new FileStream(partialPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 128, useAsync: true))
+                await source.CopyToAsync(destination).ConfigureAwait(false);
+
+            long length = new FileInfo(partialPath).Length;
+            if (length < 1_000_000)
+                throw new InvalidDataException($"GitHub returned an incomplete browser file ({FormatBytes(length)}).");
+            File.Move(partialPath, targetPath, overwrite: true);
+            _realYouTubeBrowserPath = targetPath;
+            MainThreadActions.Enqueue(() =>
+            {
+                Notify("Real YouTube GUI installed", $"Download complete ({FormatBytes(length)}). Opening the actual YouTube website now.", NotificationType.Success, 7f);
+                LaunchRealYouTubeBrowser();
+            });
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Error($"Real YouTube browser installation failed: {ex}");
+            FailOnMainThread($"Browser download failed: {ex.Message}. You can download it from the GitHub release instead.");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _browserInstallRunning, 0);
+        }
+    }
+
+    private static void CheckRealYouTubeBrowser()
+    {
+        _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
+        if (!File.Exists(_realYouTubeBrowserPath))
+        {
+            Warn("The real YouTube GUI is not installed. Select Install / update browser, or Open REAL YouTube GUI to download it.");
+            return;
+        }
+
+        string version = DllVersion(_realYouTubeBrowserPath);
+        Notify("Real YouTube GUI ready", $"Installed v{version}. It uses YouTube's actual signed-out website and auto-copies selected videos.", NotificationType.Success, 8f);
+        MelonLogger.Msg($"Real YouTube browser ready: {_realYouTubeBrowserPath} (v{version})");
+    }
+
+    private static void OpenRealYouTubeBrowserFolder()
+    {
+        _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
+        string folder = File.Exists(_realYouTubeBrowserPath)
+            ? Path.GetDirectoryName(_realYouTubeBrowserPath) ?? _dataDirectory
+            : _dataDirectory;
+        OpenFolder(folder, "real YouTube browser folder");
+    }
+
+    private static void CopyLastRealYouTubeSelection()
+    {
+        if (!TryReadRealYouTubeSelection(out string url))
+        {
+            Warn("No video has been clicked in the real YouTube GUI yet.");
+            return;
+        }
+
+        GUIUtility.systemCopyBuffer = url;
+        AddRecentVideo($"Real YouTube {GetYouTubeVideoId(url)}", url);
+        Notify("YouTube URL copied", "The last video clicked in the real YouTube GUI is ready to paste.", NotificationType.Success, 5f);
+    }
+
+    private static void SpawnMediaPlayerWithRealYouTubeSelection()
+    {
+        if (!TryReadRealYouTubeSelection(out string url))
+        {
+            Warn("Click a video in the real YouTube GUI first.");
+            return;
+        }
+
+        GUIUtility.systemCopyBuffer = url;
+        AddRecentVideo($"Real YouTube {GetYouTubeVideoId(url)}", url);
+        SpawnMediaPlayer(MediaPlayerBarcode, "Media Player");
+    }
+
+    private static bool TryReadRealYouTubeSelection(out string url)
+    {
+        url = string.Empty;
+        try
+        {
+            _realYouTubeSelectionPath = ResolveRealYouTubeSelectionPath();
+            if (!File.Exists(_realYouTubeSelectionPath)) return false;
+            string selected = File.ReadAllText(_realYouTubeSelectionPath).Trim();
+            if (!IsYouTubeUrl(selected)) return false;
+            url = selected;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not read the real YouTube selection: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static void PollRealYouTubeSelection()
+    {
+        try
+        {
+            _realYouTubeSelectionPath = ResolveRealYouTubeSelectionPath();
+            if (!File.Exists(_realYouTubeSelectionPath)) return;
+            DateTime writeUtc = File.GetLastWriteTimeUtc(_realYouTubeSelectionPath);
+            if (writeUtc <= _lastRealBrowserSelectionWriteUtc) return;
+            _lastRealBrowserSelectionWriteUtc = writeUtc;
+            if (!TryReadRealYouTubeSelection(out string url)) return;
+
+            GUIUtility.systemCopyBuffer = url;
+            AddRecentVideo($"Real YouTube {GetYouTubeVideoId(url)}", url);
+            Notify("YouTube video selected", "URL copied automatically. It is ready for ClipLink or Media Player.", NotificationType.Success, 6f);
+            MelonLogger.Msg($"Real YouTube GUI selected and copied: {url}");
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not poll the real YouTube browser selection: {ex.Message}");
+        }
+    }
+
+    private static string ResolveRealYouTubeSelectionPath()
+    {
+        string standardPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClipLinkMedia",
+            "selected-youtube-url.txt");
+        string companionPath = string.IsNullOrWhiteSpace(_realYouTubeBrowserPath)
+            ? string.Empty
+            : Path.Combine(Path.GetDirectoryName(_realYouTubeBrowserPath) ?? string.Empty, "selected-youtube-url.txt");
+
+        return new[] { standardPath, companionPath }
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault() ?? standardPath;
+    }
+
     private static void OpenYtDlpDownload()
     {
         try
@@ -3139,6 +3361,48 @@ public sealed class Core : MelonMod
         return Path.Combine(userDataDirectory, "yt-dlp.exe");
     }
 
+    private static string ResolveRealYouTubeBrowserPath()
+    {
+        string installedPath = Path.Combine(_dataDirectory, RealYouTubeBrowserFileName);
+        if (File.Exists(installedPath)) return installedPath;
+
+        string pathPointer = Path.Combine(_dataDirectory, "youtube-browser-path.txt");
+        try
+        {
+            if (File.Exists(pathPointer))
+            {
+                string configuredPath = Environment.ExpandEnvironmentVariables(File.ReadAllText(pathPointer).Trim().Trim('"'));
+                if (File.Exists(configuredPath)) return configuredPath;
+            }
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not read YouTube browser path: {ex.Message}");
+        }
+
+        string userDataDirectory = MelonEnvironment.UserDataDirectory;
+        if (Directory.Exists(userDataDirectory))
+        {
+            try
+            {
+                string? foundPath = Directory
+                    .EnumerateFiles(userDataDirectory, RealYouTubeBrowserFileName, SearchOption.AllDirectories)
+                    .FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(foundPath)) return foundPath;
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"Could not search UserData for the real YouTube browser: {ex.Message}");
+            }
+        }
+
+        string downloadsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads",
+            RealYouTubeBrowserFileName);
+        return File.Exists(downloadsPath) ? downloadsPath : installedPath;
+    }
+
     private static string CreateJobDirectory()
     {
         string jobsRoot = ChooseJobsRoot();
@@ -3208,6 +3472,20 @@ public sealed class Core : MelonMod
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
         client.DefaultRequestHeaders.UserAgent.ParseAdd($"ClipLinkMedia/{ModVersion}");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        return client;
+    }
+
+    private static HttpClient CreateBrowserDownloadHttpClient()
+    {
+        var handler = new HttpClientHandler
+        {
+            AllowAutoRedirect = true,
+            AutomaticDecompression = DecompressionMethods.All,
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(20) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"ClipLinkMedia/{ModVersion}");
+        client.DefaultRequestHeaders.Accept.ParseAdd("application/octet-stream");
+        client.DefaultRequestHeaders.Accept.ParseAdd("*/*");
         return client;
     }
 

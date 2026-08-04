@@ -1,5 +1,15 @@
 # Changelog
 
+## 5.5.0
+
+- Added a companion browser that displays YouTube's actual live website GUI through Microsoft WebView2 instead of recreating its appearance in BoneMenu.
+- The companion opens in a private signed-out profile and blocks Google account-login navigation.
+- Clicking a watch, Short, live, or `youtu.be` video automatically normalizes and copies its standard YouTube watch URL.
+- Added BoneMenu controls to open, install/update, check, and locate the real YouTube GUI, plus controls to copy its last selection or spawn Media Player with that selection.
+- Added automatic in-game detection of newly selected real-browser videos, including a success notification and recent-video persistence.
+- The mod can download the separate companion EXE from the GitHub release and shows an in-game notification when installation finishes. The Thunderstore package remains EXE-free.
+- Kept the native thumbnail search as an explicitly labeled fallback.
+
 ## 5.4.0
 
 - Rebuilt the signed-out YouTube browser as a visual YouTube-style BoneMenu interface that remains clickable in VR.
