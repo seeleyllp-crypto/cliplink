@@ -23,16 +23,16 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.5.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.6.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("5.5.0.0")]
-[assembly: AssemblyFileVersion("5.5.0.0")]
+[assembly: AssemblyVersion("5.6.0.0")]
+[assembly: AssemblyFileVersion("5.6.0.0")]
 
 namespace ClipLinkMedia;
 
 public sealed class Core : MelonMod
 {
-    private const string ModVersion = "5.5.0";
+    private const string ModVersion = "5.6.0";
     private const ulong OwnerPlatformId = 76561199548494681UL;
     private const string YouTubeHome = "https://www.youtube.com/";
     private const string RealYouTubeBrowserFileName = "ClipLinkYouTubeBrowser.exe";
@@ -82,6 +82,8 @@ public sealed class Core : MelonMod
     private static string _ytDlpPath = string.Empty;
     private static string _realYouTubeBrowserPath = string.Empty;
     private static string _realYouTubeSelectionPath = string.Empty;
+    private static string _realYouTubeMenuBridgeDirectory = string.Empty;
+    private static string _realYouTubeMenuCommandPath = string.Empty;
     private static string _lastPublicUrl = string.Empty;
     private static string _searchQuery = "bonelab";
     private static Page? _searchResultsPage;
@@ -91,8 +93,10 @@ public sealed class Core : MelonMod
     private static Page? _favoritesPage;
     private static Page? _queuePage;
     private static Page? _downloadsPage;
+    private static Page? _realYouTubeMenuPage;
     private static Texture2D? _youtubeBackground;
     private static Texture2D? _youtubeLogo;
+    private static Texture2D? _realYouTubeMenuTexture;
     private static ClipLinkSettings _settings = new();
     private static CancellationTokenSource? _jobCancellation;
     private static string _jobStatus = "Idle";
@@ -117,7 +121,12 @@ public sealed class Core : MelonMod
     private static int _diagnosticRunning;
     private static int _browserInstallRunning;
     private static float _realBrowserPollSeconds;
+    private static float _realBrowserMenuPollSeconds;
     private static DateTime _lastRealBrowserSelectionWriteUtc;
+    private static DateTime _lastRealBrowserMenuFrameWriteUtc;
+    private static bool _realBrowserMenuFrameShown;
+    private static bool _launchMenuAfterBrowserInstall;
+    private static int _realBrowserMenuFrameReadRunning;
 
     public override void OnInitializeMelon()
     {
@@ -137,6 +146,7 @@ public sealed class Core : MelonMod
         Directory.CreateDirectory(_screenshotsDirectory);
         _ytDlpPath = ResolveYtDlpPath();
         _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
+        InitializeRealYouTubeMenuBridge();
         _realYouTubeSelectionPath = ResolveRealYouTubeSelectionPath();
         if (File.Exists(_realYouTubeSelectionPath))
             _lastRealBrowserSelectionWriteUtc = File.GetLastWriteTimeUtc(_realYouTubeSelectionPath);
@@ -202,6 +212,13 @@ public sealed class Core : MelonMod
         {
             _realBrowserPollSeconds = 0f;
             PollRealYouTubeSelection();
+        }
+
+        _realBrowserMenuPollSeconds += Time.unscaledDeltaTime;
+        if (_realBrowserMenuPollSeconds >= 0.5f)
+        {
+            _realBrowserMenuPollSeconds = 0f;
+            PollRealYouTubeMenuFrame();
         }
     }
 
@@ -421,23 +438,35 @@ public sealed class Core : MelonMod
     private static void BuildBoneMenu()
     {
         Page page = Page.Root.CreatePage("ClipLink Media", Color.cyan);
-        Page realBrowserPage = page.CreatePage("REAL YouTube website", new Color(1f, 0f, 0f));
-        realBrowserPage.CreateFunction("Open REAL YouTube GUI", Color.red, OpenRealYouTubeBrowser);
-        realBrowserPage.CreateFunction("Copy last clicked video", Color.white, CopyLastRealYouTubeSelection);
-        realBrowserPage.CreateFunction("Use clicked video + spawn player", Color.cyan, SpawnMediaPlayerWithRealYouTubeSelection);
-        realBrowserPage.CreateFunction("Check browser install", Color.green, CheckRealYouTubeBrowser);
-        realBrowserPage.CreateFunction("Install / update browser", Color.yellow, InstallRealYouTubeBrowser);
-        realBrowserPage.CreateFunction("Open browser install folder", Color.yellow, OpenRealYouTubeBrowserFolder);
-        realBrowserPage.CreateFunction("Open regular browser fallback", Color.gray, OpenYouTube);
+        _realYouTubeMenuPage = page.CreatePage("YouTube IN MENU", new Color(1f, 0f, 0f));
+        ApplyYouTubeTheme(_realYouTubeMenuPage);
+        _realYouTubeMenuPage.BackgroundOpacity = 1f;
+        _realYouTubeMenuPage.ElementSpacing = 50f;
+        _realYouTubeMenuPage.CreateFunction("Start REAL YouTube in menu", Color.red, StartRealYouTubeInMenu);
+        _realYouTubeMenuPage.CreateString("YouTube search", Color.white, _searchQuery, value => _searchQuery = value.Trim());
+        _realYouTubeMenuPage.CreateFunction("Search real YouTube", Color.red, SearchRealYouTubeInMenu);
+        _realYouTubeMenuPage.CreateFunction("Previous YouTube control", Color.white, () => SendRealYouTubeMenuCommand("previous"));
+        _realYouTubeMenuPage.CreateFunction("Next YouTube control", Color.white, () => SendRealYouTubeMenuCommand("next"));
+        _realYouTubeMenuPage.CreateFunction("SELECT focused control", Color.green, () => SendRealYouTubeMenuCommand("select"));
+        _realYouTubeMenuPage.CreateFunction("Scroll YouTube up", Color.cyan, () => SendRealYouTubeMenuCommand("scrollup"));
+        _realYouTubeMenuPage.CreateFunction("Scroll YouTube down", Color.cyan, () => SendRealYouTubeMenuCommand("scrolldown"));
+        _realYouTubeMenuPage.CreateFunction("YouTube back", Color.yellow, () => SendRealYouTubeMenuCommand("back"));
+        _realYouTubeMenuPage.CreateFunction("YouTube home", Color.red, () => SendRealYouTubeMenuCommand("home"));
+        _realYouTubeMenuPage.CreateFunction("Reload YouTube", Color.yellow, () => SendRealYouTubeMenuCommand("reload"));
+        _realYouTubeMenuPage.CreateFunction("Copy last clicked video", Color.white, CopyLastRealYouTubeSelection);
+        _realYouTubeMenuPage.CreateFunction("Use clicked video + spawn player", Color.cyan, SpawnMediaPlayerWithRealYouTubeSelection);
+        _realYouTubeMenuPage.CreateFunction("Stop in-menu YouTube", Color.gray, StopRealYouTubeInMenu);
+        _realYouTubeMenuPage.CreateFunction("Open separate YouTube window", Color.gray, OpenRealYouTubeBrowser);
+        _realYouTubeMenuPage.CreateFunction("Install / update browser", Color.yellow, InstallRealYouTubeBrowser);
 
         Page browserPage = page.CreatePage("Thumbnail browser fallback", Color.gray);
         ApplyYouTubeTheme(browserPage);
         FunctionElement youtubeHeader = browserPage.CreateFunction(
             "Native VR fallback",
             Color.white,
-            () => Notify("YouTube", "This is the native VR fallback. Use REAL YouTube website for YouTube's actual GUI.", NotificationType.Information, 7f));
+            () => Notify("YouTube", "This is the native VR fallback. Use YouTube IN MENU for YouTube's actual webpage.", NotificationType.Information, 7f));
         youtubeHeader.Logo = _youtubeLogo;
-        youtubeHeader.SetTooltip("Fallback thumbnail search. The REAL YouTube website page launches YouTube's actual GUI.");
+        youtubeHeader.SetTooltip("Fallback thumbnail search. YouTube IN MENU renders the actual webpage as its background.");
         StringElement searchElement = browserPage.CreateString("Search", Color.white, _searchQuery, value => _searchQuery = value.Trim());
         searchElement.SetTooltip("Select the keyboard button, type a search, and press Enter.");
         browserPage.CreateFunction("Search YouTube", Color.red, SearchYouTube);
@@ -2261,6 +2290,198 @@ public sealed class Core : MelonMod
         }
     }
 
+    private static void InitializeRealYouTubeMenuBridge()
+    {
+        string browserDirectory = File.Exists(_realYouTubeBrowserPath)
+            ? Path.GetDirectoryName(_realYouTubeBrowserPath) ?? _dataDirectory
+            : _dataDirectory;
+        _realYouTubeMenuBridgeDirectory = Path.Combine(browserDirectory, "ClipLinkMenuBridge");
+        _realYouTubeMenuCommandPath = Path.Combine(_realYouTubeMenuBridgeDirectory, "command.json");
+        try
+        {
+            Directory.CreateDirectory(_realYouTubeMenuBridgeDirectory);
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not initialize the in-menu YouTube bridge: {ex.Message}");
+        }
+    }
+
+    private static void StartRealYouTubeInMenu()
+    {
+        _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
+        InitializeRealYouTubeMenuBridge();
+        if (!File.Exists(_realYouTubeBrowserPath))
+        {
+            _launchMenuAfterBrowserInstall = true;
+            InstallRealYouTubeBrowser();
+            return;
+        }
+
+        if (IsRealYouTubeMenuRunning())
+        {
+            Notify("YouTube is already in the menu", "The real webpage feed is running. Use the menu controls to browse it.", NotificationType.Information, 5f);
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = _realYouTubeBrowserPath,
+                WorkingDirectory = Path.GetDirectoryName(_realYouTubeBrowserPath) ?? _dataDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add("--menu-mode");
+            startInfo.ArgumentList.Add("--bridge-dir");
+            startInfo.ArgumentList.Add(_realYouTubeMenuBridgeDirectory);
+            Process.Start(startInfo);
+            _lastRealBrowserMenuFrameWriteUtc = DateTime.MinValue;
+            _realBrowserMenuFrameShown = false;
+            Notify("Loading real YouTube in menu", "The actual signed-out webpage is starting behind these controls.", NotificationType.Information, 7f);
+            MelonLogger.Msg($"Started in-menu YouTube bridge: {_realYouTubeMenuBridgeDirectory}");
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Could not start YouTube in the menu: {ex.Message}");
+        }
+    }
+
+    private static bool IsRealYouTubeMenuRunning()
+    {
+        string statusPath = Path.Combine(_realYouTubeMenuBridgeDirectory, "status.json");
+        try
+        {
+            if (!File.Exists(statusPath)) return false;
+            using JsonDocument status = JsonDocument.Parse(File.ReadAllText(statusPath));
+            if (!status.RootElement.TryGetProperty("processId", out JsonElement processIdElement)
+                || !processIdElement.TryGetInt32(out int processId))
+                return false;
+            using Process process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void SearchRealYouTubeInMenu()
+    {
+        if (string.IsNullOrWhiteSpace(_searchQuery))
+        {
+            Warn("Type a YouTube search first.");
+            return;
+        }
+        SendRealYouTubeMenuCommand("search", _searchQuery);
+    }
+
+    private static void SendRealYouTubeMenuCommand(string action, string value = "")
+    {
+        if (!IsRealYouTubeMenuRunning())
+            StartRealYouTubeInMenu();
+        try
+        {
+            Directory.CreateDirectory(_realYouTubeMenuBridgeDirectory);
+            File.WriteAllText(_realYouTubeMenuCommandPath, JsonSerializer.Serialize(new
+            {
+                id = Guid.NewGuid().ToString("N"),
+                action,
+                value,
+                sentAtUtc = DateTimeOffset.UtcNow,
+            }));
+        }
+        catch (Exception ex)
+        {
+            FailOnMainThread($"Could not control the in-menu YouTube page: {ex.Message}");
+        }
+    }
+
+    private static void StopRealYouTubeInMenu()
+    {
+        if (!IsRealYouTubeMenuRunning())
+        {
+            Warn("The in-menu YouTube page is not running.");
+            return;
+        }
+        SendRealYouTubeMenuCommand("stop");
+        Notify("YouTube menu", "Closing the real webpage feed.", NotificationType.Information, 4f);
+    }
+
+    private static void PollRealYouTubeMenuFrame()
+    {
+        if (_realYouTubeMenuPage == null
+            || string.IsNullOrWhiteSpace(_realYouTubeMenuBridgeDirectory)
+            || !Directory.Exists(_realYouTubeMenuBridgeDirectory)
+            || Volatile.Read(ref _realBrowserMenuFrameReadRunning) != 0)
+            return;
+
+        try
+        {
+            FileInfo? newestFrame = new DirectoryInfo(_realYouTubeMenuBridgeDirectory)
+                .GetFiles("youtube-frame-*.png", SearchOption.TopDirectoryOnly)
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (newestFrame == null || newestFrame.LastWriteTimeUtc <= _lastRealBrowserMenuFrameWriteUtc) return;
+            _lastRealBrowserMenuFrameWriteUtc = newestFrame.LastWriteTimeUtc;
+            string framePath = newestFrame.FullName;
+            Interlocked.Exchange(ref _realBrowserMenuFrameReadRunning, 1);
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    byte[] bytes = File.ReadAllBytes(framePath);
+                    MainThreadActions.Enqueue(() => DisplayRealYouTubeMenuFrame(bytes));
+                }
+                catch (Exception ex)
+                {
+                    MelonLogger.Warning($"Could not read the in-menu YouTube frame: {ex.Message}");
+                    Interlocked.Exchange(ref _realBrowserMenuFrameReadRunning, 0);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not poll the in-menu YouTube frame: {ex.Message}");
+        }
+    }
+
+    private static void DisplayRealYouTubeMenuFrame(byte[] bytes)
+    {
+        try
+        {
+            if (bytes.Length < 10_000 || _realYouTubeMenuPage == null) return;
+            if (_realYouTubeMenuTexture == null)
+            {
+                _realYouTubeMenuTexture = new Texture2D(2, 2, TextureFormat.RGBA32, false)
+                {
+                    name = "ClipLink Real YouTube Menu",
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp,
+                };
+                _realYouTubeMenuPage.Background = _realYouTubeMenuTexture;
+                _realYouTubeMenuPage.BackgroundOpacity = 1f;
+            }
+            if (!ImageConversion.LoadImage(_realYouTubeMenuTexture, bytes, markNonReadable: false))
+                throw new InvalidDataException("Unity could not decode the YouTube webpage frame.");
+
+            if (!_realBrowserMenuFrameShown)
+            {
+                _realBrowserMenuFrameShown = true;
+                Notify("Real YouTube is in the menu", "Use Previous/Next and SELECT to click the actual webpage.", NotificationType.Success, 7f);
+            }
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not display the in-menu YouTube frame: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _realBrowserMenuFrameReadRunning, 0);
+        }
+    }
+
     private static void OpenRealYouTubeBrowser()
     {
         _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
@@ -2327,8 +2548,17 @@ public sealed class Core : MelonMod
             _realYouTubeBrowserPath = targetPath;
             MainThreadActions.Enqueue(() =>
             {
+                InitializeRealYouTubeMenuBridge();
                 Notify("Real YouTube GUI installed", $"Download complete ({FormatBytes(length)}). Opening the actual YouTube website now.", NotificationType.Success, 7f);
-                LaunchRealYouTubeBrowser();
+                if (_launchMenuAfterBrowserInstall)
+                {
+                    _launchMenuAfterBrowserInstall = false;
+                    StartRealYouTubeInMenu();
+                }
+                else
+                {
+                    LaunchRealYouTubeBrowser();
+                }
             });
         }
         catch (Exception ex)
@@ -2347,7 +2577,7 @@ public sealed class Core : MelonMod
         _realYouTubeBrowserPath = ResolveRealYouTubeBrowserPath();
         if (!File.Exists(_realYouTubeBrowserPath))
         {
-            Warn("The real YouTube GUI is not installed. Select Install / update browser, or Open REAL YouTube GUI to download it.");
+            Warn("The real YouTube GUI is not installed. Select Start REAL YouTube in menu or Install / update browser to download it.");
             return;
         }
 
