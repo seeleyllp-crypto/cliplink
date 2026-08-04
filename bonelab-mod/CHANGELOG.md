@@ -1,5 +1,15 @@
 # Changelog
 
+## 5.3.0
+
+- Added a Fusion presence handshake that confirms which current lobby players are running ClipLink Media v5.3.0 or newer.
+- Added in-game controls to show, copy, and refresh the confirmed ClipLink user list, including player names and reported mod versions.
+- Added a notification when another ClipLink user is detected in the lobby; presence is session-local and is not sent to an external tracking service.
+- Fixed the YouTube 403 path by retrying failed default downloads with the Android VR and Safari player clients instead of forcing the broken iOS client path.
+- Added three bounded Litterbox upload attempts, safe upload filenames, response validation, and clearer server/WAF error reporting.
+- Failed Litterbox uploads now preserve the completed MP4 in ClipLink Downloads instead of deleting it.
+- Added **Retry saved failed upload**, which retries the preserved file without downloading the YouTube video again.
+
 ## 5.2.0
 
 - Media Players spawned from ClipLink now use LabFusion's `NetworkAssetSpawner` while connected to a Fusion server.

@@ -11,22 +11,27 @@ using BoneLib.Notifications;
 using LabFusion.Entities;
 using LabFusion.Marrow.Pool;
 using LabFusion.Network;
+using LabFusion.Network.Serialization;
+using LabFusion.Player;
 using LabFusion.RPC;
+using LabFusion.SDK.Modules;
 using LabFusion.UI;
+using LabFusion.Utilities;
 using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.2.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.3.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("5.2.0.0")]
-[assembly: AssemblyFileVersion("5.2.0.0")]
+[assembly: AssemblyVersion("5.3.0.0")]
+[assembly: AssemblyFileVersion("5.3.0.0")]
 
 namespace ClipLinkMedia;
 
 public sealed class Core : MelonMod
 {
+    private const string ModVersion = "5.3.0";
     private const ulong OwnerPlatformId = 76561199548494681UL;
     private const string YouTubeHome = "https://www.youtube.com/";
     private const string YtDlpDownloadUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
@@ -50,12 +55,13 @@ public sealed class Core : MelonMod
     private const long MaxUploadBytes = 1_000_000_000L;
     private const long MinimumTemporarySpace = 1200L * 1024 * 1024;
     private static readonly ConcurrentQueue<Action> MainThreadActions = new();
-    private static readonly HttpClient UploadHttpClient = CreateUploadHttpClient();
     private static readonly HttpClient YouTubeHttpClient = CreateYouTubeHttpClient();
     private static readonly HttpClient DiagnosticsHttpClient = CreateDiagnosticsHttpClient();
     private static readonly object JobGate = new();
     private static readonly Stopwatch UtilityStopwatch = new();
     private static readonly Dictionary<NetworkPlayer, OwnerTagElement> OwnerTags = new();
+    private static readonly object PresenceGate = new();
+    private static readonly Dictionary<byte, ClipLinkPresenceInfo> ClipLinkUsers = new();
     private static readonly List<LinkHistoryEntry> LinkHistory = new();
     private static string _dataDirectory = string.Empty;
     private static string _downloadsDirectory = string.Empty;
@@ -114,7 +120,8 @@ public sealed class Core : MelonMod
 
         BuildBoneMenu();
         InitializeFusionOwnerTag();
-        MelonLogger.Msg($"All-in-one v5.2 ready with Fusion-synced media-player spawning and practical BONELAB diagnostics/support utilities. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
+        InitializeFusionPresence();
+        MelonLogger.Msg($"All-in-one v{ModVersion} ready with Fusion mod-presence detection, synced media-player spawning, and resilient video uploads. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
         MelonLogger.Msg("Fusion OWNER tag enabled. Players with ClipLink Media installed will see OWNER above the creator's head.");
         MelonLogger.Warning("Litterbox uploads are public and temporary. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
@@ -204,6 +211,110 @@ public sealed class Core : MelonMod
         catch (Exception ex) { MelonLogger.Warning($"Could not remove Fusion OWNER tag: {ex.Message}"); }
     }
 
+    private static void InitializeFusionPresence()
+    {
+        try
+        {
+            if (ModuleMessageManager.GetHandlerByType(typeof(ClipLinkPresenceMessage)) == null)
+                ModuleMessageManager.RegisterHandler<ClipLinkPresenceMessage>();
+
+            MultiplayerHooking.OnJoinedServer += OnFusionJoinedServer;
+            MultiplayerHooking.OnDisconnected += OnFusionDisconnected;
+            MultiplayerHooking.OnPlayerJoined += OnFusionPlayerJoined;
+            MultiplayerHooking.OnPlayerLeft += OnFusionPlayerLeft;
+
+            if (NetworkInfo.HasServer)
+                OnFusionJoinedServer();
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not initialize Fusion ClipLink presence: {ex.Message}");
+        }
+    }
+
+    private static void OnFusionJoinedServer()
+    {
+        lock (PresenceGate)
+        {
+            ClipLinkUsers.Clear();
+            if (PlayerIDManager.LocalID != null)
+                ClipLinkUsers[PlayerIDManager.LocalSmallID] = new ClipLinkPresenceInfo(ModVersion, DateTimeOffset.UtcNow);
+        }
+
+        SendClipLinkPresence(CommonMessageRoutes.ReliableToOtherClients, requestReply: true);
+        MelonLogger.Msg("Announced ClipLink presence to the current Fusion lobby.");
+    }
+
+    private static void OnFusionDisconnected()
+    {
+        lock (PresenceGate) ClipLinkUsers.Clear();
+    }
+
+    private static void OnFusionPlayerJoined(PlayerID playerId)
+    {
+        if (playerId == null || playerId.IsMe) return;
+        SendClipLinkPresence(new MessageRoute(playerId.SmallID, NetworkChannel.Reliable), requestReply: true);
+    }
+
+    private static void OnFusionPlayerLeft(PlayerID playerId)
+    {
+        if (playerId == null) return;
+        lock (PresenceGate) ClipLinkUsers.Remove(playerId.SmallID);
+    }
+
+    private static void SendClipLinkPresence(MessageRoute route, bool requestReply)
+    {
+        if (!NetworkInfo.HasServer) return;
+        try
+        {
+            MessageRelay.RelayModule<ClipLinkPresenceMessage, ClipLinkPresenceData>(
+                new ClipLinkPresenceData(ModVersion, requestReply),
+                route);
+        }
+        catch (Exception ex)
+        {
+            MelonLogger.Warning($"Could not send ClipLink presence: {ex.Message}");
+        }
+    }
+
+    internal static void ReceiveClipLinkPresence(ReceivedMessage received)
+    {
+        if (!received.Sender.HasValue) return;
+
+        ClipLinkPresenceData data = received.ReadData<ClipLinkPresenceData>();
+        byte sender = received.Sender.Value;
+        bool firstDetection;
+        lock (PresenceGate)
+        {
+            firstDetection = !ClipLinkUsers.ContainsKey(sender);
+            ClipLinkUsers[sender] = new ClipLinkPresenceInfo(
+                string.IsNullOrWhiteSpace(data.Version) ? "unknown" : data.Version,
+                DateTimeOffset.UtcNow);
+        }
+
+        string playerName = GetFusionPlayerName(sender);
+        MelonLogger.Msg($"ClipLink presence received from {playerName} (Fusion ID {sender}, v{data.Version}).");
+        if (firstDetection)
+        {
+            MainThreadActions.Enqueue(() => Notify(
+                "ClipLink user detected",
+                $"{playerName} is using ClipLink Media v{data.Version}.",
+                NotificationType.Success,
+                5f));
+        }
+
+        if (data.RequestReply)
+            SendClipLinkPresence(new MessageRoute(sender, NetworkChannel.Reliable), requestReply: false);
+    }
+
+    private static string GetFusionPlayerName(byte smallId)
+    {
+        return NetworkPlayerManager.TryGetPlayer(smallId, out NetworkPlayer? player)
+            && !string.IsNullOrWhiteSpace(player.Username)
+                ? player.Username
+                : $"Fusion player {smallId}";
+    }
+
     private static void BuildBoneMenu()
     {
         Page page = Page.Root.CreatePage("ClipLink Media", Color.cyan);
@@ -226,6 +337,7 @@ public sealed class Core : MelonMod
         page.CreateBool("I own / have permission", Color.yellow, false, value => _rightsConfirmed = value);
         page.CreateFunction("Make public MP4 URL", Color.green, StartClipboardJob);
         page.CreateFunction("Download MP4 only", Color.green, StartLocalDownloadJob);
+        page.CreateFunction("Retry saved failed upload", Color.yellow, RetryLastFailedUpload);
         page.CreateFunction("Cancel current job", Color.red, CancelCurrentJob);
 
         _queuePage = page.CreatePage("Batch video queue", Color.yellow);
@@ -481,6 +593,9 @@ public sealed class Core : MelonMod
 
         Page fusion = utilities.CreatePage("Fusion session diagnostics", Color.magenta);
         fusion.CreateFunction("Show Fusion player count", Color.white, ShowFusionPlayerCount);
+        fusion.CreateFunction("Show ClipLink users", Color.green, ShowClipLinkUsers);
+        fusion.CreateFunction("Copy ClipLink user list", Color.cyan, CopyClipLinkUserList);
+        fusion.CreateFunction("Refresh ClipLink detection", Color.yellow, RefreshClipLinkDetection);
         fusion.CreateFunction("Copy Fusion player list", Color.cyan, CopyFusionPlayerList);
         fusion.CreateFunction("Copy Fusion session report", Color.green, CopyFusionSessionReport);
 
@@ -557,7 +672,7 @@ public sealed class Core : MelonMod
             $"VSync: {(QualitySettings.vSyncCount > 0 ? "On" : "Off")}",
             $"Local audio: {AudioListener.volume * 100f:0}%",
             $"Unity: {Application.unityVersion}",
-            $"ClipLink Media: 5.2.0",
+            $"ClipLink Media: {ModVersion}",
         });
         GUIUtility.systemCopyBuffer = report;
         MelonLogger.Msg(report);
@@ -923,7 +1038,70 @@ public sealed class Core : MelonMod
     private static void ShowFusionPlayerCount()
     {
         int count = NetworkPlayer.Players.Count;
-        Notify("Fusion session", $"{count} registered player(s); {OwnerTags.Count} remote OWNER tag(s) attached locally.", NotificationType.Information, 5f);
+        int clipLinkCount;
+        lock (PresenceGate) clipLinkCount = ClipLinkUsers.Count;
+        Notify("Fusion session", $"{count} registered player(s); {clipLinkCount} confirmed ClipLink user(s); {OwnerTags.Count} remote OWNER tag(s).", NotificationType.Information, 6f);
+    }
+
+    private static string BuildClipLinkUserList()
+    {
+        List<KeyValuePair<byte, ClipLinkPresenceInfo>> users;
+        lock (PresenceGate)
+            users = ClipLinkUsers.OrderBy(entry => entry.Key).ToList();
+
+        if (!NetworkInfo.HasServer)
+            return "Not connected to a Fusion lobby.";
+        if (users.Count == 0)
+            return "No confirmed ClipLink users have answered yet.";
+
+        var lines = new List<string> { $"Confirmed ClipLink Media users ({users.Count})" };
+        foreach ((byte smallId, ClipLinkPresenceInfo presence) in users)
+        {
+            string local = smallId == PlayerIDManager.LocalSmallID ? " [YOU]" : string.Empty;
+            lines.Add($"- {GetFusionPlayerName(smallId)}{local} | v{presence.Version}");
+        }
+        lines.Add("Only players with ClipLink Media v5.3.0 or newer can answer this check.");
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void ShowClipLinkUsers()
+    {
+        if (!NetworkInfo.HasServer)
+        {
+            Warn("Join a Fusion lobby before checking ClipLink users.");
+            return;
+        }
+
+        int confirmed;
+        lock (PresenceGate) confirmed = ClipLinkUsers.Count;
+        int total = Math.Max(PlayerIDManager.PlayerCount, NetworkPlayer.Players.Count);
+        Notify("ClipLink users", $"{confirmed} of {total} Fusion player(s) confirmed. Use 'Copy ClipLink user list' for names and versions.", NotificationType.Information, 7f);
+    }
+
+    private static void CopyClipLinkUserList()
+    {
+        string report = BuildClipLinkUserList();
+        GUIUtility.systemCopyBuffer = report;
+        MelonLogger.Msg(report);
+        Notify("ClipLink user list", "Confirmed ClipLink player names and versions copied.", NotificationType.Success, 5f);
+    }
+
+    private static void RefreshClipLinkDetection()
+    {
+        if (!NetworkInfo.HasServer)
+        {
+            Warn("Join a Fusion lobby before refreshing ClipLink detection.");
+            return;
+        }
+
+        lock (PresenceGate)
+        {
+            ClipLinkUsers.Clear();
+            if (PlayerIDManager.LocalID != null)
+                ClipLinkUsers[PlayerIDManager.LocalSmallID] = new ClipLinkPresenceInfo(ModVersion, DateTimeOffset.UtcNow);
+        }
+        SendClipLinkPresence(CommonMessageRoutes.ReliableToOtherClients, requestReply: true);
+        Notify("ClipLink detection", "Presence request sent to the Fusion lobby.", NotificationType.Information, 5f);
     }
 
     private static void CopyFusionPlayerList()
@@ -941,6 +1119,7 @@ public sealed class Core : MelonMod
             "Fusion session diagnostics",
             $"Fusion assembly: {typeof(NetworkPlayer).Assembly.GetName().Version}",
             $"Local OWNER tags attached: {OwnerTags.Count}",
+            BuildClipLinkUserList(),
             BuildFusionPlayerList(),
         });
         GUIUtility.systemCopyBuffer = report;
@@ -965,7 +1144,7 @@ public sealed class Core : MelonMod
         });
         string report = string.Join(Environment.NewLine + Environment.NewLine, new[]
         {
-            "CLIPLINK MEDIA COMPLETE SUPPORT REPORT v5.2.0",
+            $"CLIPLINK MEDIA COMPLETE SUPPORT REPORT v{ModVersion}",
             health,
             session,
             BuildFusionPlayerList(),
@@ -1055,7 +1234,7 @@ public sealed class Core : MelonMod
             {
                 _latestReleaseUrl = url;
                 bool current = Version.TryParse(tag.TrimStart('v'), out Version? latestVersion)
-                            && Version.TryParse("5.2.0", out Version? currentVersion)
+                            && Version.TryParse(ModVersion, out Version? currentVersion)
                             && currentVersion.CompareTo(latestVersion) >= 0;
                 Notify("ClipLink update check", current ? $"You are current ({tag})." : $"Latest release: {tag}. Open latest release to update.", current ? NotificationType.Success : NotificationType.Warning, 7f);
             });
@@ -1204,6 +1383,9 @@ public sealed class Core : MelonMod
         if (!IsSupportedVideoQuality(_settings.VideoQuality))
             _settings.VideoQuality = "Best";
         _settings.LastSourceUrl ??= string.Empty;
+        _settings.LastFailedUploadPath ??= string.Empty;
+        _settings.LastFailedUploadSourceUrl ??= string.Empty;
+        _settings.LastFailedUploadRetention ??= string.Empty;
         _settings.PersonalNote ??= string.Empty;
         if (_settings.LowFpsThreshold is not (45 or 60 or 72))
             _settings.LowFpsThreshold = 45;
@@ -1992,6 +2174,39 @@ public sealed class Core : MelonMod
         TryStartClipboardJob(uploadPublicly: false);
     }
 
+    private static void RetryLastFailedUpload()
+    {
+        if (!_rightsConfirmed)
+        {
+            Warn("Turn on 'I own / have permission' before retrying an upload.");
+            return;
+        }
+
+        string savedPath = _settings.LastFailedUploadPath;
+        if (string.IsNullOrWhiteSpace(savedPath) || !File.Exists(savedPath))
+        {
+            Warn("There is no saved failed upload to retry.");
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _jobRunning, 1, 0) != 0)
+        {
+            Warn("ClipLink Media is already working on a video.");
+            return;
+        }
+
+        string retention = IsSupportedRetention(_settings.LastFailedUploadRetention)
+            ? _settings.LastFailedUploadRetention
+            : _settings.LitterboxRetention;
+        string sourceUrl = _settings.LastFailedUploadSourceUrl;
+        var cancellation = new CancellationTokenSource();
+        lock (JobGate) _jobCancellation = cancellation;
+        _jobStartedUtc = DateTimeOffset.UtcNow;
+        _jobStatus = $"Retrying saved upload: {Path.GetFileName(savedPath)}";
+        Notify("ClipLink upload retry", $"Uploading the saved MP4 for {RetentionDisplay(retention)}...", NotificationType.Information, 5f);
+        _ = Task.Run(() => ProcessSavedUploadJob(savedPath, sourceUrl, retention, cancellation));
+    }
+
     private static void TryStartClipboardJob(bool uploadPublicly)
     {
         string url = GUIUtility.systemCopyBuffer?.Trim() ?? string.Empty;
@@ -2097,6 +2312,39 @@ public sealed class Core : MelonMod
         Notify("ClipLink Media", stoppedQueue ? "Cancelling the current job and stopping the batch queue..." : "Cancelling the current job...", NotificationType.Warning, 4f);
     }
 
+    private static void ProcessSavedUploadJob(string savedPath, string sourceUrl, string retention, CancellationTokenSource cancellation)
+    {
+        CancellationToken token = cancellation.Token;
+        try
+        {
+            long fileBytes = new FileInfo(savedPath).Length;
+            string publicUrl = UploadToLitterbox(savedPath, retention, token);
+            token.ThrowIfCancellationRequested();
+            QueuePublicUploadCompletion(publicUrl, sourceUrl, retention, fileBytes, clearFailedUpload: true);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            _jobStatus = "Saved upload retry cancelled";
+            MainThreadActions.Enqueue(() => Notify("ClipLink Media", "Saved upload retry cancelled. The MP4 is still in Downloads.", NotificationType.Warning, 5f));
+        }
+        catch (Exception ex)
+        {
+            _jobStatus = $"Saved upload retry failed: {LastPart(ex.Message, 120)}";
+            MelonLogger.Error($"Saved upload retry failed: {ex}");
+            MainThreadActions.Enqueue(() => Notify("Upload still unavailable", $"{LastPart(ex.Message, 130)} The MP4 remains saved; retry later.", NotificationType.Error, 8f));
+        }
+        finally
+        {
+            lock (JobGate)
+            {
+                if (ReferenceEquals(_jobCancellation, cancellation))
+                    _jobCancellation = null;
+            }
+            cancellation.Dispose();
+            Interlocked.Exchange(ref _jobRunning, 0);
+        }
+    }
+
     private static void CopyLastPublicUrl()
     {
         if (string.IsNullOrWhiteSpace(_lastPublicUrl))
@@ -2172,7 +2420,7 @@ public sealed class Core : MelonMod
         string report = string.Join(Environment.NewLine, new[]
         {
             "ClipLink Media setup report",
-            "Version: 5.2.0",
+            $"Version: {ModVersion}",
             $"yt-dlp: {ytDlpVersion}",
             $"yt-dlp path: {_ytDlpPath}",
             $"Fusion assembly: {typeof(NetworkPlayer).Assembly.GetName().Version}",
@@ -2232,11 +2480,13 @@ public sealed class Core : MelonMod
     private static void ProcessVideoJob(string youtubeUrl, bool uploadPublicly, string retention, string quality, CancellationTokenSource cancellation, bool fromQueue)
     {
         string? jobDirectory = null;
+        string? mp4Path = null;
+        bool uploadStarted = false;
         CancellationToken token = cancellation.Token;
         try
         {
             jobDirectory = CreateJobDirectory();
-            string mp4Path = DownloadVideo(youtubeUrl, jobDirectory, quality, token);
+            mp4Path = DownloadVideo(youtubeUrl, jobDirectory, quality, token);
             token.ThrowIfCancellationRequested();
             long fileBytes = new FileInfo(mp4Path).Length;
             string fileSize = FormatBytes(fileBytes);
@@ -2267,33 +2517,10 @@ public sealed class Core : MelonMod
                 Notify("Download finished", $"{fileSize} MP4 ready. Uploading for {RetentionDisplay(retention)}...", NotificationType.Information, 5f);
             });
 
+            uploadStarted = true;
             string publicUrl = UploadToLitterbox(mp4Path, retention, token);
             token.ThrowIfCancellationRequested();
-            DateTimeOffset createdUtc = DateTimeOffset.UtcNow;
-            DateTimeOffset expiresUtc = createdUtc.Add(RetentionDuration(retention));
-            MainThreadActions.Enqueue(() =>
-            {
-                _lastPublicUrl = publicUrl;
-                GUIUtility.systemCopyBuffer = publicUrl;
-                LinkHistory.RemoveAll(entry => string.Equals(entry.DirectUrl, publicUrl, StringComparison.OrdinalIgnoreCase));
-                LinkHistory.Insert(0, new LinkHistoryEntry
-                {
-                    DirectUrl = publicUrl,
-                    SourceUrl = youtubeUrl,
-                    CreatedUtc = createdUtc,
-                    ExpiresUtc = expiresUtc,
-                });
-                while (LinkHistory.Count > MaximumHistoryEntries)
-                    LinkHistory.RemoveAt(LinkHistory.Count - 1);
-                _settings.TotalPublicLinks++;
-                _settings.TotalBytesProcessed += fileBytes;
-                _settings.LastJobCompletedUtc = createdUtc;
-                SaveSettings();
-                RefreshHistoryPage();
-                _jobStatus = $"Completed public link: {publicUrl}";
-                MelonLogger.Msg($"Public MP4 URL copied: {publicUrl}");
-                Notify("ClipLink Media finished", $"{RetentionDisplay(retention)} MP4 URL copied. Expires {expiresUtc.LocalDateTime:g}.", NotificationType.Success, 7f);
-            });
+            QueuePublicUploadCompletion(publicUrl, youtubeUrl, retention, fileBytes, clearFailedUpload: false);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -2305,7 +2532,33 @@ public sealed class Core : MelonMod
         {
             _jobStatus = $"Job failed: {LastPart(ex.Message, 120)}";
             MelonLogger.Error($"Video job failed: {ex}");
-            FailOnMainThread(ex.Message);
+            if (uploadPublicly && uploadStarted && !string.IsNullOrWhiteSpace(mp4Path) && File.Exists(mp4Path))
+            {
+                try
+                {
+                    string savedPath = SaveDownloadedVideo(mp4Path, CancellationToken.None);
+                    MainThreadActions.Enqueue(() =>
+                    {
+                        _settings.LastFailedUploadPath = savedPath;
+                        _settings.LastFailedUploadSourceUrl = youtubeUrl;
+                        _settings.LastFailedUploadRetention = retention;
+                        SaveSettings();
+                        RefreshDownloadsPage();
+                        _jobStatus = $"Upload failed; MP4 saved: {Path.GetFileName(savedPath)}";
+                        Notify("Upload failed - MP4 saved", $"{LastPart(ex.Message, 105)} Use 'Retry saved failed upload'; no re-download needed.", NotificationType.Error, 10f);
+                    });
+                    MelonLogger.Warning($"Upload failed, so the downloaded MP4 was preserved at {savedPath}");
+                }
+                catch (Exception saveEx)
+                {
+                    MelonLogger.Error($"Could not preserve the downloaded MP4 after upload failure: {saveEx}");
+                    FailOnMainThread($"{ex.Message} The downloaded MP4 also could not be saved: {saveEx.Message}");
+                }
+            }
+            else
+            {
+                FailOnMainThread(ex.Message);
+            }
         }
         finally
         {
@@ -2327,12 +2580,67 @@ public sealed class Core : MelonMod
         }
     }
 
+    private static void QueuePublicUploadCompletion(string publicUrl, string sourceUrl, string retention, long fileBytes, bool clearFailedUpload)
+    {
+        DateTimeOffset createdUtc = DateTimeOffset.UtcNow;
+        DateTimeOffset expiresUtc = createdUtc.Add(RetentionDuration(retention));
+        MainThreadActions.Enqueue(() =>
+        {
+            _lastPublicUrl = publicUrl;
+            GUIUtility.systemCopyBuffer = publicUrl;
+            LinkHistory.RemoveAll(entry => string.Equals(entry.DirectUrl, publicUrl, StringComparison.OrdinalIgnoreCase));
+            LinkHistory.Insert(0, new LinkHistoryEntry
+            {
+                DirectUrl = publicUrl,
+                SourceUrl = sourceUrl,
+                CreatedUtc = createdUtc,
+                ExpiresUtc = expiresUtc,
+            });
+            while (LinkHistory.Count > MaximumHistoryEntries)
+                LinkHistory.RemoveAt(LinkHistory.Count - 1);
+            _settings.TotalPublicLinks++;
+            _settings.TotalBytesProcessed += fileBytes;
+            _settings.LastJobCompletedUtc = createdUtc;
+            if (clearFailedUpload)
+            {
+                _settings.LastFailedUploadPath = string.Empty;
+                _settings.LastFailedUploadSourceUrl = string.Empty;
+                _settings.LastFailedUploadRetention = string.Empty;
+            }
+            SaveSettings();
+            RefreshHistoryPage();
+            _jobStatus = $"Completed public link: {publicUrl}";
+            MelonLogger.Msg($"Public MP4 URL copied: {publicUrl}");
+            Notify("ClipLink Media finished", $"{RetentionDisplay(retention)} MP4 URL copied. Expires {expiresUtc.LocalDateTime:g}.", NotificationType.Success, 8f);
+        });
+    }
+
     private static string DownloadVideo(string youtubeUrl, string jobDirectory, string quality, CancellationToken token)
     {
         if (!File.Exists(_ytDlpPath))
             throw new FileNotFoundException("yt-dlp.exe is missing. Download it from the official GitHub link in BoneMenu and put it in the ClipLinkMedia folder.", _ytDlpPath);
 
-        string resultFile = Path.Combine(jobDirectory, "download-result.txt");
+        (string? path, string error) first = RunYtDlpAttempt(youtubeUrl, Path.Combine(jobDirectory, "default-client"), quality, null, token);
+        if (!string.IsNullOrWhiteSpace(first.path))
+            return ValidateDownloadedMp4(first.path);
+
+        MelonLogger.Warning($"Default yt-dlp client attempt failed; retrying with Android VR and Safari clients. {LastPart(first.error, 350)}");
+        (string? path, string error) fallback = RunYtDlpAttempt(
+            youtubeUrl,
+            Path.Combine(jobDirectory, "fallback-client"),
+            quality,
+            "youtube:player_client=android_vr,web_safari",
+            token);
+        if (!string.IsNullOrWhiteSpace(fallback.path))
+            return ValidateDownloadedMp4(fallback.path);
+
+        throw new InvalidOperationException($"Download failed after two YouTube client attempts: {LastPart(fallback.error, 420)}");
+    }
+
+    private static (string? path, string error) RunYtDlpAttempt(string youtubeUrl, string attemptDirectory, string quality, string? extractorArgs, CancellationToken token)
+    {
+        Directory.CreateDirectory(attemptDirectory);
+        string resultFile = Path.Combine(attemptDirectory, "download-result.txt");
         var startInfo = new ProcessStartInfo
         {
             FileName = _ytDlpPath,
@@ -2340,13 +2648,16 @@ public sealed class Core : MelonMod
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            WorkingDirectory = jobDirectory,
+            WorkingDirectory = attemptDirectory,
         };
         startInfo.ArgumentList.Add("--no-playlist");
         startInfo.ArgumentList.Add("--windows-filenames");
         startInfo.ArgumentList.Add("--newline");
-        startInfo.ArgumentList.Add("--extractor-args");
-        startInfo.ArgumentList.Add("youtube:player_client=android_vr,android,ios");
+        if (!string.IsNullOrWhiteSpace(extractorArgs))
+        {
+            startInfo.ArgumentList.Add("--extractor-args");
+            startInfo.ArgumentList.Add(extractorArgs);
+        }
         startInfo.ArgumentList.Add("-f");
         startInfo.ArgumentList.Add(VideoFormatSelector(quality));
         startInfo.ArgumentList.Add("--max-filesize");
@@ -2355,7 +2666,7 @@ public sealed class Core : MelonMod
         startInfo.ArgumentList.Add("after_move:%(filepath)s");
         startInfo.ArgumentList.Add(resultFile);
         startInfo.ArgumentList.Add("-o");
-        startInfo.ArgumentList.Add(Path.Combine(jobDirectory, "%(title).80B [%(id)s].%(ext)s"));
+        startInfo.ArgumentList.Add(Path.Combine(attemptDirectory, "%(title).80B [%(id)s].%(ext)s"));
         startInfo.ArgumentList.Add(youtubeUrl);
 
         using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("yt-dlp did not start.");
@@ -2374,13 +2685,19 @@ public sealed class Core : MelonMod
         token.ThrowIfCancellationRequested();
 
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"Download failed: {LastPart(stderr.Result.Trim(), 500)}");
+            return (null, string.IsNullOrWhiteSpace(stderr.Result) ? stdout.Result.Trim() : stderr.Result.Trim());
 
         string? mp4Path = File.Exists(resultFile)
             ? File.ReadLines(resultFile).LastOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim()
             : null;
         if (string.IsNullOrEmpty(mp4Path) || !File.Exists(mp4Path))
-            throw new InvalidOperationException("The download finished but no MP4 file was found.");
+            return (null, "The download finished but no MP4 file was found.");
+
+        return (mp4Path, string.Empty);
+    }
+
+    private static string ValidateDownloadedMp4(string mp4Path)
+    {
         if (!string.Equals(Path.GetExtension(mp4Path), ".mp4", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("YouTube did not provide a compatible MP4 for this video.");
 
@@ -2429,22 +2746,55 @@ public sealed class Core : MelonMod
 
     private static string UploadToLitterbox(string mp4Path, string retention, CancellationToken token)
     {
-        using var form = new MultipartFormDataContent();
-        form.Add(new StringContent("fileupload"), "reqtype");
-        form.Add(new StringContent(retention), "time");
+        string safeUploadName = $"cliplink-{Guid.NewGuid():N}.mp4";
+        string lastError = "Litterbox did not return a URL.";
 
-        var fileContent = new StreamContent(File.OpenRead(mp4Path));
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
-        form.Add(fileContent, "fileToUpload", Path.GetFileName(mp4Path));
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                using HttpClient client = CreateUploadHttpClient();
+                using var form = new MultipartFormDataContent();
+                form.Add(new StringContent("fileupload"), "reqtype");
+                form.Add(new StringContent(retention), "time");
 
-        using HttpResponseMessage response = UploadHttpClient.PostAsync(LitterboxUploadUrl, form, token).GetAwaiter().GetResult();
-        string responseBody = response.Content.ReadAsStringAsync(token).GetAwaiter().GetResult().Trim();
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Upload failed ({(int)response.StatusCode}): {LastPart(responseBody, 300)}");
-        if (!Uri.TryCreate(responseBody, UriKind.Absolute, out Uri? uri) || uri.Scheme != Uri.UriSchemeHttps)
-            throw new InvalidOperationException($"Litterbox returned an invalid URL: {LastPart(responseBody, 300)}");
+                using var fileContent = new StreamContent(File.OpenRead(mp4Path));
+                fileContent.Headers.ContentType = new MediaTypeHeaderValue("video/mp4");
+                fileContent.Headers.ContentLength = new FileInfo(mp4Path).Length;
+                form.Add(fileContent, "fileToUpload", safeUploadName);
 
-        return uri.AbsoluteUri;
+                using HttpResponseMessage response = client.PostAsync(LitterboxUploadUrl, form, token).GetAwaiter().GetResult();
+                string responseBody = response.Content.ReadAsStringAsync(token).GetAwaiter().GetResult().Trim();
+                if (response.IsSuccessStatusCode
+                    && Uri.TryCreate(responseBody, UriKind.Absolute, out Uri? uri)
+                    && uri.Scheme == Uri.UriSchemeHttps
+                    && (uri.Host.Equals("catbox.moe", StringComparison.OrdinalIgnoreCase)
+                        || uri.Host.EndsWith(".catbox.moe", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return uri.AbsoluteUri;
+                }
+
+                string bodySummary = responseBody.StartsWith("<", StringComparison.Ordinal)
+                    ? "Litterbox returned an HTML server/WAF error instead of a URL."
+                    : LastPart(responseBody, 220);
+                lastError = $"attempt {attempt}/3, HTTP {(int)response.StatusCode}: {bodySummary}";
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                lastError = $"attempt {attempt}/3: {LastPart(ex.Message, 240)}";
+            }
+
+            MelonLogger.Warning($"Litterbox upload {lastError}");
+            if (attempt < 3)
+                Task.Delay(TimeSpan.FromSeconds(attempt * 2), token).GetAwaiter().GetResult();
+        }
+
+        throw new InvalidOperationException($"Litterbox upload failed after 3 attempts ({lastError}).");
     }
 
     private static void Warn(string message)
@@ -2620,8 +2970,19 @@ public sealed class Core : MelonMod
 
     private static HttpClient CreateUploadHttpClient()
     {
-        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.2.0");
+        var handler = new HttpClientHandler
+        {
+            UseCookies = false,
+            AllowAutoRedirect = true,
+            AutomaticDecompression = DecompressionMethods.All,
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(15) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127 Safari/537.36 ClipLinkMedia/5.3.0");
+        client.DefaultRequestHeaders.Accept.ParseAdd("text/plain");
+        client.DefaultRequestHeaders.Accept.ParseAdd("*/*");
+        client.DefaultRequestHeaders.Referrer = new Uri("https://litterbox.catbox.moe/");
+        client.DefaultRequestHeaders.ExpectContinue = false;
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://litterbox.catbox.moe");
         return client;
     }
 
@@ -2647,7 +3008,7 @@ public sealed class Core : MelonMod
             AutomaticDecompression = DecompressionMethods.All,
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.2.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.3.0");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }
@@ -2671,6 +3032,9 @@ public sealed class ClipLinkSettings
     public string LitterboxRetention { get; set; } = "72h";
     public string VideoQuality { get; set; } = "Best";
     public string LastSourceUrl { get; set; } = string.Empty;
+    public string LastFailedUploadPath { get; set; } = string.Empty;
+    public string LastFailedUploadSourceUrl { get; set; } = string.Empty;
+    public string LastFailedUploadRetention { get; set; } = string.Empty;
     public List<string> RecentSearches { get; set; } = new();
     public List<RecentVideoEntry> RecentVideos { get; set; } = new();
     public List<RecentVideoEntry> Favorites { get; set; } = new();
@@ -2682,6 +3046,52 @@ public sealed class ClipLinkSettings
     public int TotalLocalDownloads { get; set; }
     public long TotalBytesProcessed { get; set; }
     public DateTimeOffset? LastJobCompletedUtc { get; set; }
+}
+
+public sealed class ClipLinkPresenceInfo
+{
+    public ClipLinkPresenceInfo(string version, DateTimeOffset lastSeenUtc)
+    {
+        Version = version;
+        LastSeenUtc = lastSeenUtc;
+    }
+
+    public string Version { get; }
+    public DateTimeOffset LastSeenUtc { get; }
+}
+
+public sealed class ClipLinkPresenceData : INetSerializable
+{
+    public ClipLinkPresenceData()
+    {
+    }
+
+    public ClipLinkPresenceData(string version, bool requestReply)
+    {
+        Version = version;
+        RequestReply = requestReply;
+    }
+
+    public string Version { get; private set; } = string.Empty;
+    public bool RequestReply { get; private set; }
+
+    public void Serialize(INetSerializer serializer)
+    {
+        string version = Version;
+        bool requestReply = RequestReply;
+        serializer.SerializeValue(ref version);
+        serializer.SerializeValue(ref requestReply);
+        if (serializer.IsReader)
+        {
+            Version = version;
+            RequestReply = requestReply;
+        }
+    }
+}
+
+public sealed class ClipLinkPresenceMessage : ModuleMessageHandler
+{
+    protected override void OnHandleMessage(ReceivedMessage received) => Core.ReceiveClipLinkPresence(received);
 }
 
 public sealed class RecentVideoEntry

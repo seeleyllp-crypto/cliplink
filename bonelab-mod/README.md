@@ -1,12 +1,13 @@
 # ClipLink Media for BONELAB
 
-ClipLink Media v5.2.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It keeps the complete YouTube-to-MP4 workflow, adds a Fusion-synced in-menu spawner for the Elijoe Media Player content mod, and includes practical troubleshooting, support, maintenance, monitoring, screenshot, backup, and connectivity tools.
+ClipLink Media v5.3.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It keeps the complete YouTube-to-MP4 workflow, adds a Fusion-synced in-menu spawner for the Elijoe Media Player content mod, identifies other ClipLink users in the current Fusion lobby, and includes practical troubleshooting, support, maintenance, monitoring, screenshot, backup, and connectivity tools.
 
 ## All-in-one controls
 
 - **YouTube browser - no login** searches public video titles and copies the selected normal YouTube URL.
 - **Make public MP4 URL** downloads the copied video, uploads it to Litterbox, and automatically copies the direct MP4 URL.
 - **Download MP4 only** saves the file under `UserData/ClipLinkMedia/Downloads` without uploading it.
+- **Retry saved failed upload** retries a completed MP4 if Litterbox was temporarily unavailable, without downloading the video again.
 - **Public-link expiry** selects 1, 12, 24, or 72 hours. The selection is saved for next time.
 - **Recent public URLs** saves up to eight unexpired results with their expiry times. Select one to copy it again.
 - **Copy last public URL** and **Open last public URL** reuse the newest result.
@@ -24,6 +25,7 @@ ClipLink Media v5.2.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It ke
 - **Media player spawner** also offers flatscreen, CRT, phone, computer-monitor, and boom-box variants.
 - **Use last MP4 URL + spawn** copies the latest generated direct MP4 URL before spawning the player.
 - In a Fusion lobby, ClipLink sends the spawn through LabFusion's network asset spawner so the Media Player is replicated for the lobby. In single-player it spawns locally.
+- **Show ClipLink users**, **Copy ClipLink user list**, and **Refresh ClipLink detection** use a lobby-only handshake to confirm which current players also have ClipLink Media v5.3.0 or newer.
 - Progress, success, cancellation, and failure notifications appear in game.
 
 ## General BONELAB utility toolbox
@@ -32,7 +34,7 @@ ClipLink Media v5.2.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It ke
 - Stopwatch and timers: start/pause/reset stopwatch plus 1/5/10/15-minute countdowns.
 - Saved support notes: keep reproduction steps or troubleshooting notes across launches.
 - Mod health and support: dependency checks, duplicate/empty DLL detection, installed-mod export, recent error extraction, and a complete support report.
-- Fusion diagnostics: current player count, player-name list, and a session report without copying platform IDs.
+- Fusion diagnostics: current player count, player-name list, confirmed ClipLink users and versions, and a session report without copying platform IDs.
 - Connectivity and updates: test YouTube/Litterbox/GitHub and check the current GitHub release.
 - Maintenance: screenshots, settings/history backups, disk-space checks, and shortcuts to active mod/log/data folders.
 - Safe cleanup: requires confirmation and only removes non-link ClipLinkMediaJobs subfolders older than 24 hours.
@@ -40,6 +42,8 @@ ClipLink Media v5.2.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It ke
 - Clipboard helpers: copy local or UTC timestamps, the current scene, headset position, or a complete session report.
 
 The utility controls are local. They do not grant Fusion permissions, affect other players, or change network ownership.
+
+ClipLink presence detection is also session-local: it exchanges a small version message only with the current Fusion lobby and never uploads a player list to an external server. Players on older ClipLink versions or without the mod cannot answer and will not be marked as confirmed users.
 
 ## Use with Media Player
 
@@ -64,7 +68,7 @@ The OWNER label is cosmetic only. It does not grant server ownership, host contr
 
 ## Install yt-dlp from GitHub
 
-The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v5.2.0 GitHub release also keeps the same verified file as a [separate yt-dlp.exe asset](https://github.com/seeleyllp-crypto/cliplink/releases/download/v5.2.0/yt-dlp.exe). Do not add the EXE to the Thunderstore ZIP.
+The Thunderstore package does not bundle another project's executable. Download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v5.3.0 GitHub release also keeps the same verified file as a separate `yt-dlp.exe` asset. Do not add the EXE to the Thunderstore ZIP.
 
 In BoneMenu, choose **Setup and folders**, then **Open ClipLink folder**. Move the downloaded `yt-dlp.exe` into that folder. The full path normally ends in `UserData/ClipLinkMedia/yt-dlp.exe`. **Get yt-dlp from GitHub** opens the official download directly, and **Check setup** confirms when it is found.
 
@@ -75,3 +79,5 @@ Import the ZIP with Thunderstore Mod Manager or copy its contents into the BONEL
 Required: MelonLoader, BoneLib, Fusion, and a separately downloaded `yt-dlp.exe`. The Media Player content pack is separate.
 
 Only download and publicly upload videos you own or have permission to use. ClipLink Media has a 1 GB safety limit, and temporary Litterbox links expire at the selected time. YouTube account-only, DRM-protected, age-restricted, or unavailable videos may fail.
+
+If Litterbox returns a temporary server error, ClipLink tries three times, saves the completed MP4 in Downloads, and shows a notification. Use **Retry saved failed upload** later; the file is kept until you remove it yourself.
