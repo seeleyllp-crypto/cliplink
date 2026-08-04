@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.2.0
+
+- Media Players spawned from ClipLink now use LabFusion's `NetworkAssetSpawner` while connected to a Fusion server.
+- Network spawns use `EntitySource.Player`, a visible spawn effect, and a completion callback that confirms the replicated entity was created.
+- Single-player sessions retain the existing local BoneLib spawn path.
+- The setup check now reports whether Fusion-networked or single-player spawning is active and reminds lobby members that the Media Player content pack is required.
+
 ## 5.1.0
 
 - Added a one-click BoneMenu button that spawns the installed Elijoe Media Player in front of the player's headset.

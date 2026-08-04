@@ -9,16 +9,19 @@ using BoneLib;
 using BoneLib.BoneMenu;
 using BoneLib.Notifications;
 using LabFusion.Entities;
+using LabFusion.Marrow.Pool;
+using LabFusion.Network;
+using LabFusion.RPC;
 using LabFusion.UI;
 using MelonLoader;
 using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.1.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.2.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("5.1.0.0")]
-[assembly: AssemblyFileVersion("5.1.0.0")]
+[assembly: AssemblyVersion("5.2.0.0")]
+[assembly: AssemblyFileVersion("5.2.0.0")]
 
 namespace ClipLinkMedia;
 
@@ -111,7 +114,7 @@ public sealed class Core : MelonMod
 
         BuildBoneMenu();
         InitializeFusionOwnerTag();
-        MelonLogger.Msg($"All-in-one v5.1 ready with media-player spawning and practical BONELAB diagnostics/support utilities. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
+        MelonLogger.Msg($"All-in-one v5.2 ready with Fusion-synced media-player spawning and practical BONELAB diagnostics/support utilities. Expiry: {_settings.LitterboxRetention}; quality: {_settings.VideoQuality}; {LinkHistory.Count} saved link(s); {_settings.Favorites.Count} favorite(s); {_settings.JobQueue.Count} queued.");
         MelonLogger.Msg("Fusion OWNER tag enabled. Players with ClipLink Media installed will see OWNER above the creator's head.");
         MelonLogger.Warning("Litterbox uploads are public and temporary. Upload only videos you own or have permission to share.");
         if (!File.Exists(_ytDlpPath))
@@ -323,24 +326,64 @@ public sealed class Core : MelonMod
 
         try
         {
-            HelperMethods.SpawnCrate(
-                barcode,
-                spawnPosition,
-                spawnRotation,
-                Vector3.one,
-                false,
-                spawned =>
-                {
-                    if (spawned == null) return;
-                    Notify("Media player spawned", $"{displayName} is in front of you. Grab it and press B to use the copied direct MP4 URL.", NotificationType.Success, 7f);
-                });
-            MelonLogger.Msg($"Requested {displayName} spawn with barcode {barcode} at {spawnPosition}.");
+            if (NetworkInfo.HasServer)
+                SpawnFusionMediaPlayer(barcode, displayName, spawnPosition, spawnRotation);
+            else
+                SpawnLocalMediaPlayer(barcode, displayName, spawnPosition, spawnRotation);
         }
         catch (Exception ex)
         {
             MelonLogger.Error($"Could not spawn {displayName}: {ex}");
             Warn($"Could not spawn {displayName}: {LastPart(ex.Message, 100)}");
         }
+    }
+
+    private static void SpawnFusionMediaPlayer(string barcode, string displayName, Vector3 position, Quaternion rotation)
+    {
+        var spawnable = LocalAssetSpawner.CreateSpawnable(barcode);
+        NetworkAssetSpawner.Spawn(new NetworkAssetSpawner.SpawnRequestInfo
+        {
+            Spawnable = spawnable,
+            Position = position,
+            Rotation = rotation,
+            SpawnEffect = true,
+            SpawnSource = EntitySource.Player,
+            SpawnCallback = info =>
+            {
+                if (info.Spawned == null)
+                {
+                    Warn($"Fusion did not return a spawned {displayName}.");
+                    return;
+                }
+
+                string entity = info.Entity == null ? "unknown" : info.Entity.ID.ToString();
+                MelonLogger.Msg($"Fusion network spawn completed for {displayName}; entity {entity}.");
+                Notify(
+                    "Fusion media player synced",
+                    $"{displayName} spawned for the lobby. Grab it and press B to use the copied direct MP4 URL.",
+                    NotificationType.Success,
+                    8f);
+            },
+        });
+
+        MelonLogger.Msg($"Requested Fusion network spawn for {displayName} with barcode {barcode} at {position}.");
+        Notify("Fusion spawn requested", $"Syncing {displayName} to the lobby...", NotificationType.Information, 4f);
+    }
+
+    private static void SpawnLocalMediaPlayer(string barcode, string displayName, Vector3 position, Quaternion rotation)
+    {
+        HelperMethods.SpawnCrate(
+            barcode,
+            position,
+            rotation,
+            Vector3.one,
+            false,
+            spawned =>
+            {
+                if (spawned == null) return;
+                Notify("Media player spawned", $"{displayName} is in front of you. Grab it and press B to use the copied direct MP4 URL.", NotificationType.Success, 7f);
+            });
+        MelonLogger.Msg($"Requested local {displayName} spawn with barcode {barcode} at {position}.");
     }
 
     private static void CheckMediaPlayerSetup()
@@ -352,9 +395,12 @@ public sealed class Core : MelonMod
             return;
         }
 
+        string spawnMode = NetworkInfo.HasServer
+            ? "Fusion network spawning is active. Lobby players need the Media Player content pack."
+            : "Single-player local spawning is active.";
         Notify(
             "Media Player ready",
-            "The Elijoe Media Player pallet is installed. Spawn it, copy a direct MP4 URL, grab the player, and press B.",
+            $"The Elijoe Media Player pallet is installed. {spawnMode}",
             NotificationType.Success,
             8f);
     }
@@ -511,7 +557,7 @@ public sealed class Core : MelonMod
             $"VSync: {(QualitySettings.vSyncCount > 0 ? "On" : "Off")}",
             $"Local audio: {AudioListener.volume * 100f:0}%",
             $"Unity: {Application.unityVersion}",
-            $"ClipLink Media: 5.1.0",
+            $"ClipLink Media: 5.2.0",
         });
         GUIUtility.systemCopyBuffer = report;
         MelonLogger.Msg(report);
@@ -919,7 +965,7 @@ public sealed class Core : MelonMod
         });
         string report = string.Join(Environment.NewLine + Environment.NewLine, new[]
         {
-            "CLIPLINK MEDIA COMPLETE SUPPORT REPORT v5.1.0",
+            "CLIPLINK MEDIA COMPLETE SUPPORT REPORT v5.2.0",
             health,
             session,
             BuildFusionPlayerList(),
@@ -1009,7 +1055,7 @@ public sealed class Core : MelonMod
             {
                 _latestReleaseUrl = url;
                 bool current = Version.TryParse(tag.TrimStart('v'), out Version? latestVersion)
-                            && Version.TryParse("5.1.0", out Version? currentVersion)
+                            && Version.TryParse("5.2.0", out Version? currentVersion)
                             && currentVersion.CompareTo(latestVersion) >= 0;
                 Notify("ClipLink update check", current ? $"You are current ({tag})." : $"Latest release: {tag}. Open latest release to update.", current ? NotificationType.Success : NotificationType.Warning, 7f);
             });
@@ -2126,7 +2172,7 @@ public sealed class Core : MelonMod
         string report = string.Join(Environment.NewLine, new[]
         {
             "ClipLink Media setup report",
-            "Version: 5.1.0",
+            "Version: 5.2.0",
             $"yt-dlp: {ytDlpVersion}",
             $"yt-dlp path: {_ytDlpPath}",
             $"Fusion assembly: {typeof(NetworkPlayer).Assembly.GetName().Version}",
@@ -2575,7 +2621,7 @@ public sealed class Core : MelonMod
     private static HttpClient CreateUploadHttpClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.1.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.2.0");
         return client;
     }
 
@@ -2601,7 +2647,7 @@ public sealed class Core : MelonMod
             AutomaticDecompression = DecompressionMethods.All,
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.1.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ClipLinkMedia/5.2.0");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }
