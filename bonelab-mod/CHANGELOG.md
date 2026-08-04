@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.7.0
+
+- Reverted the v5.6.0 in-menu webpage-frame experiment.
+- Restored the v5.5 behavior: **REAL YouTube website** opens the actual signed-out YouTube GUI in the separate WebView2 companion window.
+- Kept automatic selected-video URL copying, in-game notifications, Media Player controls, automatic companion installation, and the native thumbnail fallback.
+- Used a new package version so Thunderstore accepts the reverted build without a duplicate-version error.
+
 ## 5.5.0
 
 - Added a companion browser that displays YouTube's actual live website GUI through Microsoft WebView2 instead of recreating its appearance in BoneMenu.

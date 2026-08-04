@@ -1,6 +1,6 @@
 # ClipLink Media for BONELAB
 
-ClipLink Media v5.5.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It can launch YouTube's real live GUI in a signed-out WebView2 companion, automatically copy the video you click, keep the complete YouTube-to-MP4 workflow, spawn the Elijoe Media Player through Fusion, identify other ClipLink users in the current lobby, and provide practical troubleshooting, support, maintenance, monitoring, screenshot, backup, and connectivity tools.
+ClipLink Media v5.7.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It launches YouTube's real live GUI in a signed-out WebView2 companion, automatically copies the video you click, keeps the complete YouTube-to-MP4 workflow, spawns the Elijoe Media Player through Fusion, identifies other ClipLink users in the current lobby, and provides practical troubleshooting, support, maintenance, monitoring, screenshot, backup, and connectivity tools. Version 5.7.0 reverts the v5.6 in-menu webpage experiment.
 
 ## All-in-one controls
 
@@ -27,7 +27,7 @@ ClipLink Media v5.5.0 is an all-in-one Windows PC BONELAB MelonLoader mod. It ca
 - **Media player spawner** also offers flatscreen, CRT, phone, computer-monitor, and boom-box variants.
 - **Use last MP4 URL + spawn** copies the latest generated direct MP4 URL before spawning the player.
 - In a Fusion lobby, ClipLink sends the spawn through LabFusion's network asset spawner so the Media Player is replicated for the lobby. In single-player it spawns locally.
-- **Show ClipLink users**, **Copy ClipLink user list**, and **Refresh ClipLink detection** use a lobby-only handshake to confirm which current players also have ClipLink Media v5.5.0 or newer.
+- **Show ClipLink users**, **Copy ClipLink user list**, and **Refresh ClipLink detection** use a lobby-only handshake to confirm which current players also have ClipLink Media v5.7.0 or newer.
 - Progress, success, cancellation, and failure notifications appear in game.
 
 ## General BONELAB utility toolbox
@@ -70,7 +70,7 @@ The OWNER label is cosmetic only. It does not grant server ownership, host contr
 
 ## Install yt-dlp from GitHub
 
-The Thunderstore package remains EXE-free. **Open REAL YouTube GUI** downloads `ClipLinkYouTubeBrowser.exe` from the latest ClipLink GitHub release and notifies you when it finishes. Also download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v5.5.0 release keeps both executables as separate assets. Do not add either EXE to the Thunderstore ZIP.
+The Thunderstore package remains EXE-free. **Open REAL YouTube GUI** downloads `ClipLinkYouTubeBrowser.exe` from the latest ClipLink GitHub release and notifies you when it finishes. Also download the official Windows file from GitHub: **[Download yt-dlp.exe](https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe)**. The ClipLink v5.7.0 release keeps both executables as separate assets. Do not add either EXE to the Thunderstore ZIP.
 
 In BoneMenu, choose **Setup and folders**, then **Open ClipLink folder**. Move the downloaded `yt-dlp.exe` into that folder. The full path normally ends in `UserData/ClipLinkMedia/yt-dlp.exe`. **Get yt-dlp from GitHub** opens the official download directly, and **Check setup** confirms when it is found.
 

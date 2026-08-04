@@ -23,16 +23,16 @@ using MelonLoader.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.5.0", "seeleyllp-crypto")]
+[assembly: MelonInfo(typeof(ClipLinkMedia.Core), "ClipLink Media", "5.7.0", "seeleyllp-crypto")]
 [assembly: MelonGame("Stress Level Zero", "BONELAB")]
-[assembly: AssemblyVersion("5.5.0.0")]
-[assembly: AssemblyFileVersion("5.5.0.0")]
+[assembly: AssemblyVersion("5.7.0.0")]
+[assembly: AssemblyFileVersion("5.7.0.0")]
 
 namespace ClipLinkMedia;
 
 public sealed class Core : MelonMod
 {
-    private const string ModVersion = "5.5.0";
+    private const string ModVersion = "5.7.0";
     private const ulong OwnerPlatformId = 76561199548494681UL;
     private const string YouTubeHome = "https://www.youtube.com/";
     private const string RealYouTubeBrowserFileName = "ClipLinkYouTubeBrowser.exe";
