@@ -2,7 +2,7 @@
 
 This Windows companion displays YouTube's actual live website using Microsoft Edge WebView2. It starts with a private signed-out profile, blocks Google account-login navigation, and automatically copies a standard `youtube.com/watch?v=...` URL when a watch video, Short, live video, or `youtu.be` link is selected.
 
-ClipLink Media for BONELAB launches and installs this executable. Its `--menu-mode` renders continuously updated webpage frames to a local bridge directory and accepts Search, Previous, Next, Select, scrolling, history, reload, and stop commands from BoneMenu. Separate-window mode remains available. The executable is published as a separate GitHub release asset and is not bundled inside the Thunderstore ZIP.
+ClipLink Media for BONELAB launches and installs this executable. In VR, view the window through the SteamVR desktop panel. The executable is published as a separate GitHub release asset and is not bundled inside the Thunderstore ZIP.
 
 ## Build
 

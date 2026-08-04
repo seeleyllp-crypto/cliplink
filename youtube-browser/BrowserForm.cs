@@ -24,30 +24,18 @@ internal sealed class BrowserForm : Form
     };
     private readonly bool _smokeTest;
     private readonly string _statusPath;
-    private readonly bool _menuMode;
-    private readonly string _bridgeDirectory;
     private readonly System.Windows.Forms.Timer _smokeTimeout = new() { Interval = 60_000 };
-    private readonly System.Windows.Forms.Timer _menuTimer = new() { Interval = 650 };
     private string _runtimeVersion = "unknown";
     private string _lastCopied = string.Empty;
     private string _lastSelectionFile = string.Empty;
-    private string _lastCommandId = string.Empty;
-    private string _menuMessage = "Starting the real YouTube menu...";
-    private string _lastFramePath = string.Empty;
     private bool _finishedSmokeTest;
-    private bool _menuTickBusy;
-    private int _frameIndex;
 
-    public BrowserForm(bool smokeTest, string? statusPath, bool menuMode, string? bridgeDirectory)
+    public BrowserForm(bool smokeTest, string? statusPath)
     {
         _smokeTest = smokeTest;
-        _menuMode = menuMode;
         _statusPath = string.IsNullOrWhiteSpace(statusPath)
             ? Path.Combine(Path.GetTempPath(), "cliplink-youtube-browser-smoke.json")
             : Path.GetFullPath(statusPath);
-        _bridgeDirectory = string.IsNullOrWhiteSpace(bridgeDirectory)
-            ? Path.Combine(BrowserDataRoot(), "MenuBridge")
-            : Path.GetFullPath(bridgeDirectory);
 
         Text = "ClipLink - Real YouTube (Signed Out)";
         Icon = SystemIcons.Application;
@@ -63,15 +51,10 @@ internal sealed class BrowserForm : Form
 
         _address.KeyDown += AddressOnKeyDown;
         Shown += async (_, _) => await InitializeBrowserAsync();
-        FormClosed += (_, _) =>
-        {
-            _smokeTimeout.Stop();
-            _menuTimer.Stop();
-        };
+        FormClosed += (_, _) => _smokeTimeout.Stop();
         _smokeTimeout.Tick += (_, _) => FinishSmokeTest(false, "Timed out while loading the real YouTube website.");
-        _menuTimer.Tick += async (_, _) => await RunMenuTickAsync();
 
-        if (_smokeTest || _menuMode)
+        if (_smokeTest)
         {
             ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.FixedToolWindow;
@@ -79,10 +62,6 @@ internal sealed class BrowserForm : Form
             Location = new Point(-20_000, -20_000);
             Size = new Size(960, 640);
             Opacity = 0.01;
-        }
-
-        if (_smokeTest)
-        {
             _smokeTimeout.Start();
         }
     }
@@ -167,11 +146,6 @@ internal sealed class BrowserForm : Form
             };
 
             Navigate(_smokeTest ? SmokeVideo : YouTubeHome);
-            if (_menuMode && !_smokeTest)
-            {
-                Directory.CreateDirectory(_bridgeDirectory);
-                _menuTimer.Start();
-            }
         }
         catch (Exception ex)
         {
@@ -224,171 +198,12 @@ internal sealed class BrowserForm : Form
         if (!string.IsNullOrEmpty(_lastCopied))
         {
             _status.Text = "Video URL copied automatically. Return to BONELAB and paste it into Media Player.";
-            _menuMessage = "Video selected and copied: " + _lastCopied;
-            if (_smokeTest && _menuMode)
-                _ = CaptureMenuSmokeFrameAsync();
-            else if (_smokeTest)
-                FinishSmokeTest(true, "The real YouTube page loaded and its video URL was copied.");
+            if (_smokeTest) FinishSmokeTest(true, "The real YouTube page loaded and its video URL was copied.");
         }
         else
         {
             _status.Text = "Real YouTube loaded in signed-out mode. Click a video and ClipLink copies its URL.";
         }
-    }
-
-    private async Task CaptureMenuSmokeFrameAsync()
-    {
-        if (_finishedSmokeTest) return;
-        try
-        {
-            Directory.CreateDirectory(_bridgeDirectory);
-            await CaptureMenuFrameAsync();
-            bool frameReady = !string.IsNullOrWhiteSpace(_lastFramePath)
-                && File.Exists(_lastFramePath)
-                && new FileInfo(_lastFramePath).Length > 10_000;
-            FinishSmokeTest(
-                frameReady,
-                frameReady
-                    ? "The real YouTube page loaded, copied its URL, and rendered into an in-menu frame."
-                    : "The webpage loaded, but its in-menu frame was empty.");
-        }
-        catch (Exception ex)
-        {
-            FinishSmokeTest(false, "In-menu frame capture failed: " + ex.Message);
-        }
-    }
-
-    private async Task RunMenuTickAsync()
-    {
-        if (_menuTickBusy || _webView.CoreWebView2 == null) return;
-        _menuTickBusy = true;
-        try
-        {
-            await ProcessMenuCommandAsync();
-            await CaptureMenuFrameAsync();
-        }
-        catch (Exception ex)
-        {
-            _menuMessage = "Menu bridge error: " + ex.Message;
-            WriteMenuStatus();
-        }
-        finally
-        {
-            _menuTickBusy = false;
-        }
-    }
-
-    private async Task ProcessMenuCommandAsync()
-    {
-        string commandPath = Path.Combine(_bridgeDirectory, "command.json");
-        if (!File.Exists(commandPath)) return;
-        MenuCommand? command;
-        try
-        {
-            command = JsonSerializer.Deserialize<MenuCommand>(
-                File.ReadAllText(commandPath),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        }
-        catch
-        {
-            return;
-        }
-        if (command == null || string.IsNullOrWhiteSpace(command.Id) || command.Id == _lastCommandId) return;
-        _lastCommandId = command.Id;
-
-        string action = command.Action?.Trim().ToLowerInvariant() ?? string.Empty;
-        switch (action)
-        {
-            case "home":
-                Navigate(YouTubeHome);
-                _menuMessage = "Opening YouTube Home...";
-                break;
-            case "back":
-                if (_webView.CanGoBack) _webView.GoBack();
-                _menuMessage = "Going back...";
-                break;
-            case "forward":
-                if (_webView.CanGoForward) _webView.GoForward();
-                _menuMessage = "Going forward...";
-                break;
-            case "reload":
-                _webView.Reload();
-                _menuMessage = "Reloading YouTube...";
-                break;
-            case "search":
-                string query = command.Value?.Trim() ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(query))
-                {
-                    Navigate("https://www.youtube.com/results?search_query=" + Uri.EscapeDataString(query));
-                    _menuMessage = "Searching YouTube for " + query;
-                }
-                break;
-            case "next":
-                await _webView.CoreWebView2.ExecuteScriptAsync(FocusScript(forward: true));
-                _menuMessage = "Focused the next YouTube control.";
-                break;
-            case "previous":
-                await _webView.CoreWebView2.ExecuteScriptAsync(FocusScript(forward: false));
-                _menuMessage = "Focused the previous YouTube control.";
-                break;
-            case "select":
-                await _webView.CoreWebView2.ExecuteScriptAsync(
-                    "(() => { const e=document.activeElement; if(e && e!==document.body){ e.click(); return true; } return false; })()");
-                _menuMessage = "Selected the focused YouTube control.";
-                break;
-            case "scrollup":
-                await _webView.CoreWebView2.ExecuteScriptAsync("window.scrollBy({top:-Math.max(420,innerHeight*0.8),behavior:'smooth'})");
-                _menuMessage = "Scrolled up.";
-                break;
-            case "scrolldown":
-                await _webView.CoreWebView2.ExecuteScriptAsync("window.scrollBy({top:Math.max(420,innerHeight*0.8),behavior:'smooth'})");
-                _menuMessage = "Scrolled down.";
-                break;
-            case "stop":
-                _menuMessage = "Closing the in-menu YouTube browser.";
-                WriteMenuStatus();
-                BeginInvoke(Close);
-                break;
-        }
-    }
-
-    private async Task CaptureMenuFrameAsync()
-    {
-        if (_webView.CoreWebView2 == null) return;
-        using var image = new MemoryStream();
-        await _webView.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, image);
-        if (image.Length < 10_000) return;
-
-        string framePath = Path.Combine(_bridgeDirectory, $"youtube-frame-{_frameIndex++ % 2}.png");
-        File.WriteAllBytes(framePath, image.ToArray());
-        _lastFramePath = framePath;
-        WriteMenuStatus();
-    }
-
-    private void WriteMenuStatus()
-    {
-        string statusPath = Path.Combine(_bridgeDirectory, "status.json");
-        File.WriteAllText(statusPath, JsonSerializer.Serialize(new
-        {
-            running = true,
-            processId = Environment.ProcessId,
-            source = _webView.Source?.AbsoluteUri ?? string.Empty,
-            title = _webView.CoreWebView2?.DocumentTitle ?? string.Empty,
-            selectedVideoUrl = _lastCopied,
-            framePath = _lastFramePath,
-            message = _menuMessage,
-            updatedAtUtc = DateTimeOffset.UtcNow,
-        }, new JsonSerializerOptions { WriteIndented = true }));
-    }
-
-    private static string FocusScript(bool forward)
-    {
-        string direction = forward ? "1" : "-1";
-        return "(() => {"
-            + "const q='a[href],button:not([disabled]),input:not([disabled]),[role=button],[tabindex]:not([tabindex=\\\"-1\\\"])';"
-            + "const a=[...document.querySelectorAll(q)].filter(e=>{const r=e.getBoundingClientRect();const s=getComputedStyle(e);return r.width>2&&r.height>2&&s.visibility!=='hidden'&&s.display!=='none';});"
-            + "if(!a.length)return false;let i=a.indexOf(document.activeElement);i=(i+" + direction + "+a.length)%a.length;"
-            + "a[i].focus({preventScroll:false});a[i].scrollIntoView({block:'center',inline:'center',behavior:'smooth'});return true;})()";
     }
 
     private void CoreOnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
@@ -470,7 +285,6 @@ internal sealed class BrowserForm : Form
                 source = _webView.Source?.AbsoluteUri ?? string.Empty,
                 normalizedVideoUrl = _lastCopied,
                 selectionFile = _lastSelectionFile,
-                menuFrame = _lastFramePath,
                 checkedAtUtc = DateTimeOffset.UtcNow,
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
@@ -572,12 +386,5 @@ internal sealed class BrowserForm : Form
                 return Uri.UnescapeDataString(pair[1]);
         }
         return string.Empty;
-    }
-
-    private sealed class MenuCommand
-    {
-        public string Id { get; set; } = string.Empty;
-        public string Action { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
     }
 }

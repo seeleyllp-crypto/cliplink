@@ -1,14 +1,5 @@
 # Changelog
 
-## 5.6.0
-
-- Added **YouTube IN MENU**, which renders continuously updated frames from YouTube's actual signed-out webpage as the BoneMenu page background.
-- Added in-menu Search, Previous, Next, Select, Scroll Up, Scroll Down, Back, Home, Reload, and Stop controls for the real webpage.
-- Added a local command/status/frame bridge between the BONELAB mod and the WebView2 companion; it stays on the same PC and uses no login or API key.
-- Selecting a real webpage video keeps the existing automatic URL copy, recent-video save, and in-game notification workflow.
-- Added an in-menu runtime smoke test that verifies a real YouTube watch page can render into a PNG frame and copy its normalized URL.
-- Kept the separate-window mode and native thumbnail browser as fallbacks.
-
 ## 5.5.0
 
 - Added a companion browser that displays YouTube's actual live website GUI through Microsoft WebView2 instead of recreating its appearance in BoneMenu.

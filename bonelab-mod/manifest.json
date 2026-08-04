@@ -1,8 +1,8 @@
 {
   "name": "ClipLinkMedia",
-  "version_number": "5.6.0",
+  "version_number": "5.5.0",
   "website_url": "https://github.com/seeleyllp-crypto/cliplink",
-  "description": "BONELAB media toolbox that renders the real signed-out YouTube webpage in BoneMenu with automatic link copying and Media Player tools.",
+  "description": "BONELAB media toolbox with the real signed-out YouTube GUI, automatic link copying, Fusion detection, Media Player spawns, and resilient uploads.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
     "bonelib-BoneLib-3.2.1",
